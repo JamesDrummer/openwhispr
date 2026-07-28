@@ -132,4 +132,7 @@ Applying creates one user LaunchAgent that checks at login and every 24 hours.
 It sends a macOS notification only when an installed custom app is behind the
 fork. It also re-enables the scheduled GitHub watcher if GitHub has disabled it
 because the public fork was otherwise inactive for 60 days. It never downloads,
-installs, launches, or deletes an application.
+installs, launches, or deletes an application. A self-contained copy of the
+monitor scripts is placed under `~/Library/Application Support` because macOS
+does not permit background LaunchAgents to execute scripts from the protected
+Documents folder.
