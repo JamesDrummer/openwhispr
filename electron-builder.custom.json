@@ -1,0 +1,37 @@
+{
+  "extends": "./electron-builder.json",
+  "appId": "com.james.openwhispr.custom",
+  "productName": "OpenWhispr Custom",
+  "artifactName": "OpenWhispr-Custom-${version}-${os}-${arch}.${ext}",
+  "extraMetadata": {
+    "openwhisprChannel": "custom",
+    "openwhisprFeatureSet": "model-warmth-v1",
+    "openwhisprUpstreamBase": "6f9c7f8c62e4b36ee287be5647f961607da55f39"
+  },
+  "protocols": [
+    {
+      "name": "OpenWhispr Custom Protocol",
+      "schemes": ["openwhispr-custom"]
+    }
+  ],
+  "directories": {
+    "output": "dist-custom"
+  },
+  "mac": {
+    "identity": "-",
+    "notarize": false,
+    "extendInfo": {
+      "CFBundleDisplayName": "OpenWhispr Custom",
+      "OpenWhisprChannel": "custom",
+      "OpenWhisprFeatureSet": "model-warmth-v1",
+      "OpenWhisprUpstreamBase": "6f9c7f8c62e4b36ee287be5647f961607da55f39",
+      "NSMicrophoneUsageDescription": "OpenWhispr Custom uses the microphone to capture your voice for transcription.",
+      "NSAudioCaptureUsageDescription": "OpenWhispr Custom uses system audio to capture other participants' audio from calls and meetings.",
+      "NSAccessibilityUsageDescription": "OpenWhispr Custom needs accessibility permissions to paste transcribed text into other applications."
+    }
+  },
+  "dmg": {
+    "title": "OpenWhispr Custom"
+  },
+  "publish": []
+}

@@ -13,6 +13,8 @@ class UpdateManager {
     this.updateCheckInterval = null;
     this.windowManager = null;
     this._suppressNotification = false;
+    this.isCustomBuild = process.env.OPENWHISPR_CHANNEL === "custom";
+    this.updatesDisabled = process.env.NODE_ENV === "development" || this.isCustomBuild;
 
     this.setupAutoUpdater();
   }
@@ -22,7 +24,7 @@ class UpdateManager {
   }
 
   setupAutoUpdater() {
-    if (process.env.NODE_ENV === "development") {
+    if (this.updatesDisabled) {
       return;
     }
 
@@ -163,10 +165,13 @@ class UpdateManager {
 
   async checkForUpdates() {
     try {
-      if (process.env.NODE_ENV === "development") {
+      if (this.updatesDisabled) {
         return {
           updateAvailable: false,
-          message: "Update checks are disabled in development mode",
+          message:
+            process.env.OPENWHISPR_CHANNEL === "custom"
+              ? "Updates are managed by the custom build workflow"
+              : "Update checks are disabled in development mode",
         };
       }
 
@@ -198,10 +203,10 @@ class UpdateManager {
 
   async downloadUpdate() {
     try {
-      if (process.env.NODE_ENV === "development") {
+      if (this.updatesDisabled) {
         return {
           success: false,
-          message: "Update downloads are disabled in development mode",
+          message: "Update downloads are disabled for this build",
         };
       }
 
@@ -234,10 +239,10 @@ class UpdateManager {
 
   async installUpdate() {
     try {
-      if (process.env.NODE_ENV === "development") {
+      if (this.updatesDisabled) {
         return {
           success: false,
-          message: "Update installation is disabled in development mode",
+          message: "Update installation is disabled for this build",
         };
       }
 
@@ -285,6 +290,8 @@ class UpdateManager {
         updateAvailable: this.updateAvailable,
         updateDownloaded: this.updateDownloaded,
         isDevelopment: process.env.NODE_ENV === "development",
+        isCustomBuild: this.isCustomBuild,
+        updatesDisabled: this.updatesDisabled,
       };
     } catch (error) {
       console.error("❌ Error getting update status:", error);
@@ -302,7 +309,7 @@ class UpdateManager {
   }
 
   checkForUpdatesOnStartup() {
-    if (process.env.NODE_ENV !== "development") {
+    if (!this.updatesDisabled) {
       setTimeout(() => {
         console.log("🔄 Checking for updates on startup...");
         autoUpdater.checkForUpdates().catch((err) => {

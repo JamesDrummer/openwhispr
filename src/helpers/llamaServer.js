@@ -8,6 +8,7 @@ const { isPortAvailable } = require("../utils/serverUtils");
 const { getSafeTempDir } = require("./safeTempDir");
 const { app } = require("electron");
 const sidecarPidFile = require("./sidecarPidFile");
+const { LOCAL_LLM_IDLE_TIMEOUT_MS } = require("./llamaIdlePolicy");
 
 // Range kept clear of cliBridge (8200-8219) to avoid port-bind collisions.
 const PORT_RANGE_START = 8221;
@@ -18,7 +19,6 @@ const HEALTH_CHECK_INTERVAL_MS = 5000;
 const HEALTH_CHECK_TIMEOUT_MS = 2000;
 const STARTUP_POLL_INTERVAL_MS = 500;
 const HEALTH_CHECK_FAILURE_THRESHOLD = 3;
-const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_CONTEXT_SIZE = 4096;
 
 class LlamaServerManager {
@@ -32,6 +32,8 @@ class LlamaServerManager {
     this.draftModelPath = null;
     this.activeDraftModelPath = null;
     this.startupPromise = null;
+    this.startingModelPath = null;
+    this.startingDraftModelPath = null;
     this.healthCheckInterval = null;
     this.healthCheckFailures = 0;
     this.cachedServerBinaryPaths = null;
@@ -109,24 +111,65 @@ class LlamaServerManager {
   }
 
   async start(modelPath, options = {}) {
-    if (this.startupPromise) return this.startupPromise;
-
     // A change in drafter presence for the same model must still restart the
     // server so the new speculative-decoding flags take effect.
     const requestedDraftPath = options.draftModelPath || null;
-    if (this.ready && this.modelPath === modelPath && this.draftModelPath === requestedDraftPath)
+
+    // Join an in-flight startup only when it is for the same model. A different
+    // request waits and then starts its own model, rather than accidentally
+    // sending inference to whichever startup happened to win the race.
+    while (this.startupPromise) {
+      if (
+        this.startingModelPath === modelPath &&
+        this.startingDraftModelPath === requestedDraftPath
+      ) {
+        return this.startupPromise;
+      }
+      await this.startupPromise.catch(() => {});
+    }
+
+    if (this.ready && this.modelPath === modelPath && this.draftModelPath === requestedDraftPath) {
+      // A recording-start warm-up counts as activity. Renew the deadline so a
+      // timer inherited from the previous dictation cannot fire mid-recording.
+      this.resetIdleTimer();
       return;
+    }
 
     if (this.process) {
       await this.stop();
     }
 
-    this.startupPromise = this._doStart(modelPath, options);
+    this.startingModelPath = modelPath;
+    this.startingDraftModelPath = requestedDraftPath;
+    const startupPromise = this._doStart(modelPath, options);
+    this.startupPromise = startupPromise;
     try {
-      await this.startupPromise;
+      await startupPromise;
     } finally {
-      this.startupPromise = null;
+      if (this.startupPromise === startupPromise) {
+        this.startupPromise = null;
+        this.startingModelPath = null;
+        this.startingDraftModelPath = null;
+      }
     }
+  }
+
+  canPrewarm(modelPath, options = {}) {
+    const requestedDraftPath = options.draftModelPath || null;
+
+    if (this.startupPromise) {
+      return (
+        this.startingModelPath === modelPath && this.startingDraftModelPath === requestedDraftPath
+      );
+    }
+
+    if (this.process || this.ready) {
+      return (
+        this.ready && this.modelPath === modelPath && this.draftModelPath === requestedDraftPath
+      );
+    }
+
+    return true;
   }
 
   async _doStart(modelPath, options = {}) {
@@ -499,11 +542,12 @@ class LlamaServerManager {
     this.clearIdleTimer();
     this.idleTimer = setTimeout(() => {
       debugLogger.info("llama-server idle timeout reached, stopping to free VRAM", {
-        timeoutMs: IDLE_TIMEOUT_MS,
+        timeoutMs: LOCAL_LLM_IDLE_TIMEOUT_MS,
         model: this.modelPath ? path.basename(this.modelPath) : null,
       });
       this.stop();
-    }, IDLE_TIMEOUT_MS);
+    }, LOCAL_LLM_IDLE_TIMEOUT_MS);
+    this.idleTimer.unref?.();
   }
 
   clearIdleTimer() {

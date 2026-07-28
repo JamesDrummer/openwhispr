@@ -15,8 +15,9 @@ const LOOPBACK_ADDRESSES = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 
 const NO_CONTENT = Symbol("CliBridge.NoContent");
 
-function getBridgeFilePath() {
-  return path.join(os.homedir(), ".openwhispr", "cli-bridge.json");
+function getBridgeFilePath(channel = "production") {
+  const directory = channel === "custom" ? ".openwhispr-custom" : ".openwhispr";
+  return path.join(os.homedir(), directory, "cli-bridge.json");
 }
 
 async function findAvailablePort() {
@@ -80,12 +81,12 @@ function unwrapMutationResult(result, label) {
 }
 
 class CliBridge {
-  constructor(ipcHandlers) {
+  constructor(ipcHandlers, { channel = "production" } = {}) {
     this.ipcHandlers = ipcHandlers;
     this.server = null;
     this.port = null;
     this.token = null;
-    this.bridgeFilePath = getBridgeFilePath();
+    this.bridgeFilePath = getBridgeFilePath(channel);
     this.routes = this._buildRouteTable();
   }
 

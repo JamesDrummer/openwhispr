@@ -41,11 +41,12 @@ try {
   });
 }
 
-const VALID_CHANNELS = new Set(["development", "staging", "production"]);
+const VALID_CHANNELS = new Set(["development", "staging", "production", "custom"]);
 const DEFAULT_OAUTH_PROTOCOL_BY_CHANNEL = {
   development: "openwhispr-dev",
   staging: "openwhispr-staging",
   production: "openwhispr",
+  custom: "openwhispr-custom",
 };
 const BASE_WINDOWS_APP_ID = "com.gizmolabs.openwhispr";
 const DEFAULT_AUTH_BRIDGE_PORT = 5199;
@@ -63,6 +64,12 @@ function inferDefaultChannel() {
   if (process.env.NODE_ENV === "development" || process.defaultApp || isElectronBinaryExec()) {
     return "development";
   }
+
+  const packagedChannel = require("./package.json").openwhisprChannel;
+  if (VALID_CHANNELS.has(packagedChannel)) {
+    return packagedChannel;
+  }
+
   return "production";
 }
 
@@ -236,9 +243,11 @@ if (!gotSingleInstanceLock) {
 
 const isLiveWindow = (window) => window && !window.isDestroyed();
 
-// Ensure macOS menus use the proper casing for the app name
-if (process.platform === "darwin" && app.getName() !== "OpenWhispr") {
-  app.setName("OpenWhispr");
+// Ensure macOS menus use the proper casing while retaining a separate identity
+// for the custom build.
+const APP_DISPLAY_NAME = APP_CHANNEL === "custom" ? "OpenWhispr Custom" : "OpenWhispr";
+if (process.platform === "darwin" && app.getName() !== APP_DISPLAY_NAME) {
+  app.setName(APP_DISPLAY_NAME);
 }
 
 // Add global error handling for uncaught exceptions
@@ -867,7 +876,7 @@ async function startApp() {
   registerSidecars();
   startAuthBridgeServer();
 
-  cliBridge = new CliBridge(ipcHandlers);
+  cliBridge = new CliBridge(ipcHandlers, { channel: APP_CHANNEL });
   cliBridge.start().catch((err) => {
     debugLogger.error("CLI bridge failed to start", { error: err.message });
     cliBridge = null;

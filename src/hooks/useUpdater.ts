@@ -4,6 +4,8 @@ interface UpdateStatus {
   updateAvailable: boolean;
   updateDownloaded: boolean;
   isDevelopment: boolean;
+  isCustomBuild?: boolean;
+  updatesDisabled?: boolean;
 }
 
 interface UpdateInfo {
@@ -28,6 +30,8 @@ let globalState: UpdateState = {
     updateAvailable: false,
     updateDownloaded: false,
     isDevelopment: false,
+    isCustomBuild: false,
+    updatesDisabled: false,
   },
   info: null,
   downloadProgress: 0,

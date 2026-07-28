@@ -877,6 +877,7 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
             usageLoaded={usage?.hasLoaded ?? false}
             updateAction={
               !updateStatus.isDevelopment &&
+              !updateStatus.updatesDisabled &&
               (updateStatus.updateAvailable ||
                 updateStatus.updateDownloaded ||
                 isDownloading ||

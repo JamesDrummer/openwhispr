@@ -7,6 +7,7 @@ import { getSettings } from "../stores/settingsStore";
 import { expandSnippets } from "../utils/snippets";
 import { getRecordingErrorTitle, getRecordingErrorDescription } from "../utils/recordingErrors";
 import { isAccessibilitySkipped } from "../utils/permissions";
+import { beginDictationPrewarm } from "../helpers/localServerPolicy";
 
 export const useAudioRecording = (toast, options = {}) => {
   const { t } = useTranslation();
@@ -47,6 +48,27 @@ export const useAudioRecording = (toast, options = {}) => {
         const didStart = audioManagerRef.current.shouldUseStreaming()
           ? await audioManagerRef.current.startStreamingRecording()
           : await audioManagerRef.current.startRecording();
+
+        // Only warm after microphone capture genuinely starts. The dedicated
+        // bridge never replaces a different local model, and this call is never
+        // awaited, so recording remains available even if warm-up fails.
+        if (didStart && audioManagerRef.current.getState().isRecording) {
+          beginDictationPrewarm(
+            getSettings(),
+            { voiceAgentRequested, translationRequested },
+            (model) => window.electronAPI.llamaServerPrewarm(model),
+            (error, model) => {
+              logger.debug(
+                "Local cleanup model pre-warm failed; cleanup will retry on demand",
+                {
+                  model,
+                  error: error instanceof Error ? error.message : String(error),
+                },
+                "reasoning"
+              );
+            }
+          );
+        }
 
         // A quick tap can end the recording inside the start call itself (deferred
         // streaming stop) — don't pause media for a recording that already ended. See #1060.

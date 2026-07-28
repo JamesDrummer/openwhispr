@@ -12,6 +12,7 @@ const {
 const modelRegistryData = require("../models/modelRegistryData.json");
 const LlamaServerManager = require("./llamaServer");
 const debugLogger = require("./debugLogger");
+const { getCacheRoot } = require("./modelDirUtils");
 
 const MIN_FILE_SIZE = 1_000_000; // 1MB minimum for valid model files
 
@@ -78,10 +79,7 @@ class ModelManager {
   }
 
   getModelsDir() {
-    const os = require("os");
-    // Use os.homedir() as fallback if app.getPath fails
-    const homeDir = app.isReady() ? app.getPath("home") : os.homedir();
-    return path.join(homeDir, ".cache", "openwhispr", "models");
+    return path.join(getCacheRoot(), "models");
   }
 
   async ensureModelsDirExists() {
@@ -546,7 +544,7 @@ class ModelManager {
     return this.serverManager.getStatus();
   }
 
-  async prewarmServer(modelId) {
+  async prewarmServer(modelId, { preserveExisting = false } = {}) {
     if (!modelId) return false;
     this.ensureInitialized();
 
@@ -559,7 +557,15 @@ class ModelManager {
     if (!this.serverManager.isAvailable()) return false;
 
     try {
-      await this.serverManager.start(modelPath, await this.serverStartOptions(modelInfo));
+      const startOptions = await this.serverStartOptions(modelInfo);
+      if (preserveExisting && !this.serverManager.canPrewarm(modelPath, startOptions)) {
+        debugLogger.info("Skipping llama-server pre-warm to preserve another model", {
+          modelId,
+        });
+        return false;
+      }
+
+      await this.serverManager.start(modelPath, startOptions);
       this.currentServerModelId = modelId;
       debugLogger.info("llama-server pre-warmed", { modelId });
       return true;

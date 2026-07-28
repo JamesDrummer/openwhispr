@@ -2,7 +2,6 @@ const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const http = require("http");
-const os = require("os");
 const debugLogger = require("./debugLogger");
 const {
   findAvailablePort,
@@ -10,6 +9,7 @@ const {
   gracefulStopProcess,
 } = require("../utils/serverUtils");
 const sidecarPidFile = require("./sidecarPidFile");
+const { getCacheRoot } = require("./modelDirUtils");
 
 const PORT_RANGE_START = 6333;
 const PORT_RANGE_END = 6350;
@@ -19,9 +19,7 @@ const HEALTH_CHECK_INTERVAL_MS = 5000;
 const HEALTH_CHECK_TIMEOUT_MS = 2000;
 
 const STORAGE_DIR = path.join(
-  os.homedir(),
-  ".cache",
-  "openwhispr",
+  getCacheRoot(),
   process.env.NODE_ENV === "development" ? "qdrant-data-dev" : "qdrant-data"
 );
 

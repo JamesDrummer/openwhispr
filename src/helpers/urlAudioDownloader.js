@@ -6,11 +6,11 @@ const { isIP } = require("net");
 const childProcess = require("child_process");
 const crypto = require("crypto");
 const fs = require("fs");
-const os = require("os");
 const path = require("path");
 const debugLogger = require("./debugLogger");
 const { getSafeTempDir } = require("./safeTempDir");
 const { getFFmpegPath } = require("./ffmpegUtils");
+const { getCacheRoot } = require("./modelDirUtils");
 
 const YOUTUBE_HOSTS = new Set([
   "youtube.com",
@@ -32,8 +32,7 @@ const USER_AGENT = "OpenWhispr/1.0";
 // self-update (the bundled copy is read-only / inside the signed bundle).
 // OPENWHISPR_YTDLP_CACHE_DIR overrides the location (relocate it, or isolate it in tests).
 const YT_DLP_CACHE_DIR =
-  process.env.OPENWHISPR_YTDLP_CACHE_DIR ||
-  path.join(os.homedir(), ".cache", "openwhispr", "yt-dlp");
+  process.env.OPENWHISPR_YTDLP_CACHE_DIR || path.join(getCacheRoot(), "yt-dlp");
 const YT_DLP_UPDATE_THROTTLE_MS = 24 * 60 * 60 * 1000;
 // Bound the self-update so a stalled GitHub request can never hang a download
 // or wedge the single-flight flag. Overridable via options.timeoutMs for tests.

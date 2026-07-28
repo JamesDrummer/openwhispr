@@ -344,6 +344,8 @@ export interface UpdateStatusResult {
   updateAvailable: boolean;
   updateDownloaded: boolean;
   isDevelopment: boolean;
+  isCustomBuild?: boolean;
+  updatesDisabled?: boolean;
 }
 
 export interface UpdateInfoResult {
@@ -1023,6 +1025,9 @@ declare global {
 
       // llama-server
       llamaServerStart: (
+        modelId: string
+      ) => Promise<{ success: boolean; port?: number; error?: string }>;
+      llamaServerPrewarm: (
         modelId: string
       ) => Promise<{ success: boolean; port?: number; error?: string }>;
       llamaServerStop: () => Promise<{ success: boolean; error?: string }>;

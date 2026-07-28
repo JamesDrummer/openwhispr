@@ -2678,7 +2678,8 @@ class IPCHandlers {
 
       // Delete downloaded models
       try {
-        const whisperDir = path.join(os.homedir(), ".cache", "openwhispr", "whisper-models");
+        const { getModelsDirForService } = require("./modelDirUtils");
+        const whisperDir = getModelsDirForService("whisper");
         if (fs.existsSync(whisperDir)) fs.rmSync(whisperDir, { recursive: true, force: true });
       } catch (e) {
         errors.push(`Whisper models: ${e.message}`);
@@ -3817,6 +3818,18 @@ class IPCHandlers {
 
         this.environmentManager.saveAllKeysToEnvFile().catch(() => {});
         return { success: true, port: modelManager.serverManager.port };
+      } catch (error) {
+        return { success: false, error: error.message };
+      }
+    });
+
+    ipcMain.handle("llama-server-prewarm", async (event, modelId) => {
+      try {
+        const modelManager = require("./modelManagerBridge").default;
+        const success = await modelManager.prewarmServer(modelId, { preserveExisting: true });
+        return success
+          ? { success: true, port: modelManager.serverManager.port }
+          : { success: false };
       } catch (error) {
         return { success: false, error: error.message };
       }

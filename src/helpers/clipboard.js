@@ -5,6 +5,7 @@ const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const debugLogger = require("./debugLogger");
+const { getCacheNamespace } = require("./modelDirUtils");
 
 const CACHE_TTL_MS = 30000;
 
@@ -401,7 +402,7 @@ class ClipboardManager {
   _getPortalTokenPath() {
     const cacheDir = path.join(
       process.env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache"),
-      "openwhispr"
+      getCacheNamespace()
     );
     return path.join(cacheDir, "portal-paste-token");
   }

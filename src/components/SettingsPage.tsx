@@ -3743,18 +3743,22 @@ EOF`,
                   <SettingsRow
                     label={t("settingsPage.general.updates.currentVersion")}
                     description={
-                      updateStatus.isDevelopment
-                        ? t("settingsPage.general.updates.devMode")
-                        : isUpdateAvailable
-                          ? t("settingsPage.general.updates.newVersionAvailable")
-                          : t("settingsPage.general.updates.latestVersion")
+                      updateStatus.isCustomBuild
+                        ? "Updates are managed by the custom build workflow."
+                        : updateStatus.isDevelopment
+                          ? t("settingsPage.general.updates.devMode")
+                          : isUpdateAvailable
+                            ? t("settingsPage.general.updates.newVersionAvailable")
+                            : t("settingsPage.general.updates.latestVersion")
                     }
                   >
                     <div className="flex items-center gap-2.5">
                       <span className="text-xs tabular-nums text-muted-foreground font-mono">
                         {currentVersion || t("settingsPage.general.updates.versionPlaceholder")}
                       </span>
-                      {updateStatus.isDevelopment ? (
+                      {updateStatus.isCustomBuild ? (
+                        <Badge variant="outline">Custom</Badge>
+                      ) : updateStatus.isDevelopment ? (
                         <Badge variant="warning">
                           {t("settingsPage.general.updates.badges.dev")}
                         </Badge>
@@ -3787,7 +3791,11 @@ EOF`,
                           }
                         } catch {}
                       }}
-                      disabled={checkingForUpdates || updateStatus.isDevelopment}
+                      disabled={
+                        checkingForUpdates ||
+                        updateStatus.isDevelopment ||
+                        updateStatus.updatesDisabled
+                      }
                       variant="outline"
                       className="w-full"
                       size="sm"

@@ -121,6 +121,10 @@ test("llama-server start restarts only when model or drafter presence changes", 
   const manager = new LlamaServerManager();
 
   const calls = [];
+  let idleTimerResets = 0;
+  manager.resetIdleTimer = () => {
+    idleTimerResets++;
+  };
   manager._doStart = async (modelPath, options) => {
     manager.ready = true;
     manager.modelPath = modelPath;
@@ -134,6 +138,7 @@ test("llama-server start restarts only when model or drafter presence changes", 
   // Same model, no drafter → no restart.
   await manager.start("/models/main.gguf", {});
   assert.equal(calls.length, 1);
+  assert.equal(idleTimerResets, 1);
 
   // Drafter appears for the same model → restart.
   await manager.start("/models/main.gguf", { draftModelPath: "/models/draft.gguf" });
@@ -143,11 +148,100 @@ test("llama-server start restarts only when model or drafter presence changes", 
   // Same model, same drafter → no restart.
   await manager.start("/models/main.gguf", { draftModelPath: "/models/draft.gguf" });
   assert.equal(calls.length, 2);
+  assert.equal(idleTimerResets, 2);
 
   // Drafter disappears → restart.
   await manager.start("/models/main.gguf", {});
   assert.equal(calls.length, 3);
   assert.equal(manager.draftModelPath, null);
+});
+
+test("llama-server serializes a different model behind an in-flight startup", async () => {
+  const LlamaServerManager = require("../../src/helpers/llamaServer.js");
+  const manager = new LlamaServerManager();
+  let releaseFirst;
+  const firstPending = new Promise((resolve) => {
+    releaseFirst = resolve;
+  });
+  const calls = [];
+
+  manager._doStart = async (modelPath) => {
+    calls.push(modelPath);
+    if (modelPath === "/models/a.gguf") await firstPending;
+    manager.ready = true;
+    manager.modelPath = modelPath;
+    manager.draftModelPath = null;
+  };
+
+  const first = manager.start("/models/a.gguf");
+  const second = manager.start("/models/b.gguf");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls, ["/models/a.gguf"]);
+
+  releaseFirst();
+  await Promise.all([first, second]);
+  assert.deepEqual(calls, ["/models/a.gguf", "/models/b.gguf"]);
+  assert.equal(manager.modelPath, "/models/b.gguf");
+});
+
+test("llama-server pre-warm eligibility never replaces another model", () => {
+  const LlamaServerManager = require("../../src/helpers/llamaServer.js");
+  const manager = new LlamaServerManager();
+
+  assert.equal(manager.canPrewarm("/models/cleanup.gguf"), true);
+
+  manager.startupPromise = new Promise(() => {});
+  manager.startingModelPath = "/models/agent.gguf";
+  manager.startingDraftModelPath = null;
+  assert.equal(manager.canPrewarm("/models/cleanup.gguf"), false);
+  assert.equal(manager.canPrewarm("/models/agent.gguf"), true);
+
+  manager.startupPromise = null;
+  manager.startingModelPath = null;
+  manager.ready = true;
+  manager.process = {};
+  manager.modelPath = "/models/agent.gguf";
+  manager.draftModelPath = null;
+  assert.equal(manager.canPrewarm("/models/cleanup.gguf"), false);
+  assert.equal(manager.canPrewarm("/models/agent.gguf"), true);
+});
+
+test("llama-server idle timer stops the server at the configured deadline", async () => {
+  const { LOCAL_LLM_IDLE_TIMEOUT_MS } = require("../../src/helpers/llamaIdlePolicy.js");
+  const LlamaServerManager = require("../../src/helpers/llamaServer.js");
+  const manager = new LlamaServerManager();
+  const originalSetTimeout = global.setTimeout;
+  const originalClearTimeout = global.clearTimeout;
+  let scheduled;
+  let delay;
+  let unrefCalled = false;
+  let stopCalls = 0;
+
+  global.setTimeout = (callback, timeoutMs) => {
+    scheduled = callback;
+    delay = timeoutMs;
+    return {
+      unref() {
+        unrefCalled = true;
+      },
+    };
+  };
+  global.clearTimeout = () => {};
+  manager.stop = async () => {
+    stopCalls++;
+  };
+
+  try {
+    manager.resetIdleTimer();
+    assert.equal(delay, LOCAL_LLM_IDLE_TIMEOUT_MS);
+    assert.equal(unrefCalled, true);
+    scheduled();
+    await Promise.resolve();
+    assert.equal(stopCalls, 1);
+  } finally {
+    global.setTimeout = originalSetTimeout;
+    global.clearTimeout = originalClearTimeout;
+  }
 });
 
 // --- Degrade ladder for stale (pre-b9763) Vulkan binaries ---
