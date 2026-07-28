@@ -4,8 +4,6 @@ on:
   push:
     branches:
       - custom/model-warmth
-    paths:
-      - custom/upstream-state.json
   workflow_dispatch:
 
 concurrency:
@@ -13,7 +11,31 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  quality:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Build better-sqlite3 for Node tests
+        run: npm rebuild better-sqlite3
+      - run: npm run format:check
+      - run: npm run typecheck
+      - run: npm run i18n:check
+      - run: npm test
+        env:
+          ELECTRON_OVERRIDE_DIST_PATH: /tmp
+      - run: npm run build:renderer
+
   build:
+    needs: quality
     runs-on: macos-latest
     permissions:
       contents: read
@@ -42,11 +64,14 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
       - name: Build custom macOS package
         run: npm run build:custom:mac:arm64
+        env:
+          OPENWHISPR_CUSTOM_SOURCE_SHA: ${{ github.sha }}
       - name: Verify custom identity and signature
         run: |
           set -euo pipefail
           app="dist-custom/mac-arm64/OpenWhispr Custom.app"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = "com.james.openwhispr.custom"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :OpenWhisprCustomSource' "$app/Contents/Info.plist")" = "$GITHUB_SHA"
           codesign --verify --deep --strict "$app"
       - name: Smoke-test packaged native modules in Electron
         run: npm run verify:custom:mac:arm64
@@ -137,8 +162,9 @@ jobs:
           fi
 
   notify-failure:
-    if: ${{ always() && !cancelled() && (needs.build.result != 'success' || needs.publish-draft.result != 'success') }}
+    if: ${{ always() && !cancelled() && (needs.quality.result != 'success' || needs.build.result != 'success' || needs.publish-draft.result != 'success') }}
     needs:
+      - quality
       - build
       - publish-draft
     runs-on: ubuntu-latest
@@ -149,6 +175,7 @@ jobs:
       - name: Create or update the repair hand-off
         env:
           GH_TOKEN: ${{ github.token }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
           BUILD_RESULT: ${{ needs.build.result }}
           PUBLISH_RESULT: ${{ needs.publish-draft.result }}
         run: |
@@ -162,6 +189,7 @@ jobs:
             "Custom packaging or draft publishing needs repair." \
             "" \
             "- Source commit: \`$GITHUB_SHA\`" \
+            "- Quality job: \`$QUALITY_RESULT\`" \
             "- Build job: \`$BUILD_RESULT\`" \
             "- Draft publisher job: \`$PUBLISH_RESULT\`" \
             "- Run: $run_url" \

@@ -12,6 +12,7 @@ label="com.james.openwhispr-custom-update-monitor"
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 maintenance_root="$HOME/Library/Application Support/OpenWhispr Custom Maintenance"
 installed_scripts_dir="$maintenance_root/scripts"
+installed_lib_dir="$installed_scripts_dir/lib"
 monitor_script="$installed_scripts_dir/run-custom-update-monitor.sh"
 launch_agents_dir="$HOME/Library/LaunchAgents"
 plist_path="$launch_agents_dir/$label.plist"
@@ -45,11 +46,18 @@ if ! command -v gh >/dev/null; then
 fi
 
 gh_path="$(command -v gh)"
-mkdir -p "$launch_agents_dir" "$(dirname "$log_path")" "$installed_scripts_dir"
+mkdir -p \
+  "$launch_agents_dir" \
+  "$(dirname "$log_path")" \
+  "$installed_scripts_dir" \
+  "$installed_lib_dir"
 install -m 755 "$project_root/scripts/run-custom-update-monitor.sh" "$monitor_script"
 install -m 755 \
   "$project_root/scripts/check-custom-install.sh" \
   "$installed_scripts_dir/check-custom-install.sh"
+install -m 644 \
+  "$project_root/scripts/lib/custom-install-status.js" \
+  "$installed_lib_dir/custom-install-status.js"
 
 cat >"$plist_path" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>

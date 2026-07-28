@@ -14,6 +14,8 @@ can perform the bounded repair work described here.
 - Other active users of the shared model must not be interrupted.
 - The custom app keeps its separate application identity, URL protocol, profile,
   cache and disabled automatic updater.
+- Every packaged app carries its exact custom source SHA, and every accepted
+  custom-branch change produces a fully tested draft package.
 - Automation must never install an app or modify the official OpenWhispr app.
 
 ## Bounded repair procedure
@@ -45,7 +47,9 @@ can perform the bounded repair work described here.
 6. Put the cause, repair and verification evidence in a pull request. Only a
    mechanical, low-risk upstream integration may auto-merge. If behaviour or
    product intent is ambiguous, leave the pull request draft and ask James.
-7. Close the repair issue only after the repaired workflow is green. Package
+7. Confirm the successful package embeds the accepted branch SHA as
+   `OpenWhisprCustomSource`.
+8. Close the repair issue only after the repaired workflow is green. Package
    installation remains a separate, manual decision.
 
 ## Rollback and recovery

@@ -1,6 +1,7 @@
 {
   "extends": "./electron-builder.json",
   "npmRebuild": false,
+  "beforePack": "./scripts/stamp-custom-build-receipt.js",
   "appId": "com.james.openwhispr.custom",
   "productName": "OpenWhispr Custom",
   "artifactName": "OpenWhispr-Custom-${version}-${os}-${arch}.${ext}",

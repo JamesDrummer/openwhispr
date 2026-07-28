@@ -54,6 +54,8 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
       - name: Build custom macOS package
         run: npm run build:custom:mac:arm64
+        env:
+          OPENWHISPR_CUSTOM_SOURCE_SHA: ${{ github.sha }}
       - name: Verify custom identity and signature
         run: |
           set -euo pipefail
@@ -61,6 +63,7 @@ jobs:
           test -d "$app"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = "com.james.openwhispr.custom"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleURLTypes:0:CFBundleURLSchemes:0' "$app/Contents/Info.plist")" = "openwhispr-custom"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :OpenWhisprCustomSource' "$app/Contents/Info.plist")" = "$GITHUB_SHA"
           codesign --verify --deep --strict "$app"
       - name: Smoke-test packaged native modules in Electron
         run: npm run verify:custom:mac:arm64
