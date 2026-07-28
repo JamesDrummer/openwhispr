@@ -1,0 +1,125 @@
+name: Package Custom Release
+
+on:
+  push:
+    branches:
+      - custom/model-warmth
+    paths:
+      - custom/upstream-state.json
+  workflow_dispatch:
+
+concurrency:
+  group: custom-package
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    outputs:
+      release_tag: ${{ steps.receipt.outputs.release_tag }}
+      upstream_tag: ${{ steps.receipt.outputs.upstream_tag }}
+      upstream_sha: ${{ steps.receipt.outputs.upstream_sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Prepare native resources
+        run: npm run prebuild:mac
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Build custom macOS package
+        run: npm run build:custom:mac:arm64
+      - name: Verify custom identity and signature
+        run: |
+          set -euo pipefail
+          app="dist-custom/mac-arm64/OpenWhispr Custom.app"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = "com.james.openwhispr.custom"
+          codesign --verify --deep --strict "$app"
+      - name: Read the immutable build receipt
+        id: receipt
+        run: |
+          set -euo pipefail
+          state="$(node scripts/custom-maintenance.js status)"
+          upstream_tag="$(node -e 'const s=JSON.parse(process.argv[1]); process.stdout.write(s.lastObservedStableRelease.tag)' "$state")"
+          upstream_sha="$(node -e 'const s=JSON.parse(process.argv[1]); process.stdout.write(s.currentBaseSha)' "$state")"
+          {
+            echo "upstream_tag=$upstream_tag"
+            echo "upstream_sha=$upstream_sha"
+            echo "release_tag=custom-$upstream_tag-${upstream_sha:0:7}-1"
+          } >> "$GITHUB_OUTPUT"
+      - name: Transfer package to the publisher
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: custom-release-package
+          path: |
+            dist-custom/*.dmg
+            dist-custom/*.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-draft:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - name: Download the verified package
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: custom-release-package
+          path: package
+      - name: Create or update a private draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.build.outputs.release_tag }}
+          UPSTREAM_TAG: ${{ needs.build.outputs.upstream_tag }}
+          UPSTREAM_SHA: ${{ needs.build.outputs.upstream_sha }}
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/release-notes.md"
+          {
+            echo "OpenWhispr Custom based on upstream $UPSTREAM_TAG (\`$UPSTREAM_SHA\`)."
+            echo
+            echo "- Keeps the shared local reasoning model warm for 60 minutes."
+            echo "- Starts a safe, non-blocking cleanup-model warm-up after recording begins."
+            echo "- Uses a separate app identity, profile and cache."
+            echo "- Ad-hoc signed and not notarised; installation remains manual."
+          } > "$notes"
+
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" package/*.dmg package/*.zip \
+              --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$RELEASE_TAG" package/*.dmg package/*.zip \
+              --repo "$GITHUB_REPOSITORY" \
+              --draft --target "$GITHUB_SHA" \
+              --title "OpenWhispr Custom $UPSTREAM_TAG" \
+              --notes-file "$notes"
+          fi
+      - name: Notify the repository owner
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.build.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          title="[custom build] $RELEASE_TAG is ready to review"
+          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$title in:title" --json number --jq '.[0].number // empty')"
+          if [[ -z "$existing" ]]; then
+            issue_body="$(printf '%s\n' \
+              "A tested macOS package has been saved as a private draft release. Installation remains manual." \
+              "" \
+              "Build run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID")"
+            gh issue create \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$title" \
+              --assignee "$GITHUB_REPOSITORY_OWNER" \
+              --body "$issue_body"
+          fi

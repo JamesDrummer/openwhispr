@@ -1,0 +1,68 @@
+name: Custom Build Verification
+
+on:
+  pull_request:
+    branches:
+      - custom/model-warmth
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Build better-sqlite3 for Node tests
+        run: npm rebuild better-sqlite3
+      - run: npm run format:check
+      - run: npm run typecheck
+      - run: npm run i18n:check
+      - run: npm test
+        env:
+          ELECTRON_OVERRIDE_DIST_PATH: /tmp
+      - run: npm run build:renderer
+
+  macos-package:
+    needs: quality
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Prepare native resources
+        run: npm run prebuild:mac
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Build custom macOS package
+        run: npm run build:custom:mac:arm64
+      - name: Verify custom identity and signature
+        run: |
+          set -euo pipefail
+          app="dist-custom/mac-arm64/OpenWhispr Custom.app"
+          test -d "$app"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = "com.james.openwhispr.custom"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleURLTypes:0:CFBundleURLSchemes:0' "$app/Contents/Info.plist")" = "openwhispr-custom"
+          codesign --verify --deep --strict "$app"
+      - name: Upload candidate package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: OpenWhispr-Custom-macOS-arm64
+          path: |
+            dist-custom/*.dmg
+            dist-custom/*.zip
+          if-no-files-found: error
+          retention-days: 30

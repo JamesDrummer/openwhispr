@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "upstreamRepository": "OpenWhispr/openwhispr",
+  "currentBaseSha": "6f9c7f8c62e4b36ee287be5647f961607da55f39",
+  "lastObservedStableRelease": {
+    "tag": "v1.7.6",
+    "commitSha": "22a311fc25a6b213a0f3f317c4c7f0921600578e"
+  },
+  "watchedPaths": [
+    ".github/workflows/",
+    "electron-builder",
+    "main.js",
+    "package.json",
+    "package-lock.json",
+    "preload.js",
+    "resources/entitlements",
+    "scripts/",
+    "src/helpers/audioManager.js",
+    "src/helpers/database.js",
+    "src/helpers/ipcHandlers.js",
+    "src/helpers/llamaServer.js",
+    "src/helpers/localServerPolicy.js",
+    "src/helpers/modelManagerBridge.js",
+    "src/helpers/reasoningRouting.js",
+    "src/helpers/tokenStore.js",
+    "src/hooks/useAudioRecording.js",
+    "src/hooks/useUpdater.ts",
+    "src/stores/",
+    "src/types/electron.ts",
+    "src/updater.js"
+  ]
+}

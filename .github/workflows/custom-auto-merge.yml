@@ -1,0 +1,55 @@
+name: Custom Low-Risk Auto Merge
+
+on:
+  workflow_run:
+    workflows:
+      - Custom Build Verification
+    types:
+      - completed
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  merge:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merge a verified low-risk integration
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          GITHUB_EVENT_REPOSITORY_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [[ "$HEAD_REPOSITORY" != "$GITHUB_REPOSITORY" || "$HEAD_BRANCH" != automation/openwhispr-* ]]; then
+            echo "Not a same-repository automated upstream integration."
+            exit 0
+          fi
+
+          pr_number="$(gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA/pulls" \
+            --jq 'map(select(.state == "open"))[0].number // empty')"
+          if [[ -z "$pr_number" ]]; then
+            echo "No open PR belongs to the verified commit."
+            exit 0
+          fi
+
+          pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr_number")"
+          draft="$(node -e 'const p=JSON.parse(process.argv[1]); process.stdout.write(String(p.draft))' "$pr_json")"
+          base_ref="$(node -e 'const p=JSON.parse(process.argv[1]); process.stdout.write(p.base.ref)' "$pr_json")"
+          if [[ "$draft" == "true" || "$base_ref" != "$GITHUB_EVENT_REPOSITORY_DEFAULT_BRANCH" ]]; then
+            echo "Draft or unexpected-base PR remains approval-gated."
+            exit 0
+          fi
+
+          report="$(gh api "repos/$GITHUB_REPOSITORY/contents/custom/integration-report.json?ref=$HEAD_SHA" --jq '.content' | base64 --decode)"
+          risk="$(node -e 'const r=JSON.parse(process.argv[1]); process.stdout.write(r.risk)' "$report")"
+          if [[ "$risk" != "low" ]]; then
+            echo "Review-classified update remains approval-gated."
+            exit 0
+          fi
+
+          gh pr merge "$pr_number" --repo "$GITHUB_REPOSITORY" --merge --delete-branch
