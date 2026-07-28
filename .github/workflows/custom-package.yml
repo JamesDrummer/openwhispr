@@ -135,3 +135,44 @@ jobs:
               --assignee "$GITHUB_REPOSITORY_OWNER" \
               --body "$issue_body"
           fi
+
+  notify-failure:
+    if: ${{ always() && !cancelled() && (needs.build.result != 'success' || needs.publish-draft.result != 'success') }}
+    needs:
+      - build
+      - publish-draft
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Create or update the repair hand-off
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          PUBLISH_RESULT: ${{ needs.publish-draft.result }}
+        run: |
+          set -euo pipefail
+          short_sha="${GITHUB_SHA:0:12}"
+          title="[custom repair] package or publisher failed for $short_sha"
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search "$title in:title" --json number --jq '.[0].number // empty')"
+          issue_body="$(printf '%s\n' \
+            "Custom packaging or draft publishing needs repair." \
+            "" \
+            "- Source commit: \`$GITHUB_SHA\`" \
+            "- Build job: \`$BUILD_RESULT\`" \
+            "- Draft publisher job: \`$PUBLISH_RESULT\`" \
+            "- Run: $run_url" \
+            "- Repair procedure: \`custom/REPAIR_RUNBOOK.md\`")"
+
+          if [[ -n "$existing" ]]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" \
+              --body "Packaging failed again: $run_url"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" \
+              --title "$title" \
+              --assignee "$GITHUB_REPOSITORY_OWNER" \
+              --body "$issue_body"
+          fi

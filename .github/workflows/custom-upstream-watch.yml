@@ -170,3 +170,40 @@ jobs:
       - name: No new release
         if: steps.release.outputs.needs_update == 'false'
         run: echo "The latest stable OpenWhispr release is already represented."
+
+  notify-failure:
+    if: ${{ always() && !cancelled() && needs.integrate.result != 'success' }}
+    needs:
+      - integrate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Create or update the repair hand-off
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INTEGRATION_RESULT: ${{ needs.integrate.result }}
+        run: |
+          set -euo pipefail
+          title="[custom repair] upstream release watcher failed"
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search "$title in:title" --json number --jq '.[0].number // empty')"
+          issue_body="$(printf '%s\n' \
+            "The stable-release watcher needs repair." \
+            "" \
+            "- Source commit: \`$GITHUB_SHA\`" \
+            "- Integration job: \`$INTEGRATION_RESULT\`" \
+            "- Run: $run_url" \
+            "- Repair procedure: \`custom/REPAIR_RUNBOOK.md\`")"
+
+          if [[ -n "$existing" ]]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" \
+              --body "The watcher failed again: $run_url"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" \
+              --title "$title" \
+              --assignee "$GITHUB_REPOSITORY_OWNER" \
+              --body "$issue_body"
+          fi
