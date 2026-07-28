@@ -10,7 +10,7 @@ fi
 
 label="com.james.openwhispr-custom-update-monitor"
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-monitor_script="$project_root/scripts/check-custom-install.sh"
+monitor_script="$project_root/scripts/run-custom-update-monitor.sh"
 launch_agents_dir="$HOME/Library/LaunchAgents"
 plist_path="$launch_agents_dir/$label.plist"
 log_path="$HOME/Library/Logs/OpenWhisprCustomUpdateMonitor.log"
@@ -55,7 +55,6 @@ cat >"$plist_path" <<EOF
   <array>
     <string>/bin/bash</string>
     <string>$monitor_script</string>
-    <string>--notify</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
