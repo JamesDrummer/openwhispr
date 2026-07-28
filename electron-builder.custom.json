@@ -1,5 +1,6 @@
 {
   "extends": "./electron-builder.json",
+  "npmRebuild": false,
   "appId": "com.james.openwhispr.custom",
   "productName": "OpenWhispr Custom",
   "artifactName": "OpenWhispr-Custom-${version}-${os}-${arch}.${ext}",

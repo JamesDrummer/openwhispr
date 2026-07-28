@@ -48,6 +48,8 @@ jobs:
           app="dist-custom/mac-arm64/OpenWhispr Custom.app"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = "com.james.openwhispr.custom"
           codesign --verify --deep --strict "$app"
+      - name: Smoke-test packaged native modules in Electron
+        run: npm run verify:custom:mac:arm64
       - name: Read the immutable build receipt
         id: receipt
         run: |
@@ -55,11 +57,12 @@ jobs:
           state="$(node scripts/custom-maintenance.js status)"
           upstream_tag="$(node -e 'const s=JSON.parse(process.argv[1]); process.stdout.write(s.lastObservedStableRelease.tag)' "$state")"
           upstream_sha="$(node -e 'const s=JSON.parse(process.argv[1]); process.stdout.write(s.currentBaseSha)' "$state")"
+          build_sha="$GITHUB_SHA"
           {
             echo "upstream_tag=$upstream_tag"
             echo "upstream_sha=$upstream_sha"
-            echo "build_sha=$GITHUB_SHA"
-            echo "release_tag=custom-$upstream_tag-${upstream_sha:0:7}-1"
+            echo "build_sha=$build_sha"
+            echo "release_tag=custom-$upstream_tag-${upstream_sha:0:7}-${build_sha:0:7}"
           } >> "$GITHUB_OUTPUT"
       - name: Transfer package to the publisher
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
