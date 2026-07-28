@@ -23,16 +23,16 @@ jobs:
       upstream_sha: ${{ steps.receipt.outputs.upstream_sha }}
       build_sha: ${{ steps.receipt.outputs.build_sha }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
       - name: Restore native-resource cache
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: resources/bin
           key: custom-macos-arm64-${{ hashFiles('scripts/download-*.js', 'scripts/build-*.js', 'resources/*.swift') }}
@@ -62,7 +62,7 @@ jobs:
             echo "release_tag=custom-$upstream_tag-${upstream_sha:0:7}-1"
           } >> "$GITHUB_OUTPUT"
       - name: Transfer package to the publisher
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: custom-release-package
           path: |
@@ -79,7 +79,7 @@ jobs:
       issues: write
     steps:
       - name: Download the verified package
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
         with:
           name: custom-release-package
           path: package
