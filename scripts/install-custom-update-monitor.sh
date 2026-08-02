@@ -3,8 +3,8 @@
 set -euo pipefail
 
 mode="${1:---plan}"
-if [[ "$mode" != "--plan" && "$mode" != "--apply" ]]; then
-  echo "Usage: bash scripts/install-custom-update-monitor.sh [--plan|--apply]" >&2
+if [[ "$mode" != "--plan" && "$mode" != "--apply" && "$mode" != "--repair" ]]; then
+  echo "Usage: bash scripts/install-custom-update-monitor.sh [--plan|--apply|--repair]" >&2
   exit 2
 fi
 
@@ -35,8 +35,13 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 1
 fi
 
-if [[ -e "$plist_path" ]]; then
+if [[ "$mode" == "--apply" && -e "$plist_path" ]]; then
   echo "A monitor already exists at $plist_path; refusing to overwrite it." >&2
+  exit 1
+fi
+
+if [[ "$mode" == "--repair" && ! -e "$plist_path" ]]; then
+  echo "No existing monitor was found at $plist_path; use --apply instead." >&2
   exit 1
 fi
 
@@ -45,7 +50,13 @@ if ! command -v gh >/dev/null; then
   exit 1
 fi
 
+if ! command -v node >/dev/null; then
+  echo "Node.js is required by the update monitor." >&2
+  exit 1
+fi
+
 gh_path="$(command -v gh)"
+node_path="$(command -v node)"
 mkdir -p \
   "$launch_agents_dir" \
   "$(dirname "$log_path")" \
@@ -74,7 +85,7 @@ cat >"$plist_path" <<EOF
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>$(dirname "$gh_path"):/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <string>$(dirname "$node_path"):$(dirname "$gh_path"):/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>
@@ -89,5 +100,12 @@ cat >"$plist_path" <<EOF
 EOF
 
 plutil -lint "$plist_path"
+if [[ "$mode" == "--repair" ]]; then
+  launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
+fi
 launchctl bootstrap "gui/$(id -u)" "$plist_path"
-echo "Custom update monitor installed and loaded."
+if [[ "$mode" == "--repair" ]]; then
+  echo "Custom update monitor repaired and loaded."
+else
+  echo "Custom update monitor installed and loaded."
+fi
