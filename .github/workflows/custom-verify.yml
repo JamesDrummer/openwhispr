@@ -56,6 +56,9 @@ jobs:
         run: npm run build:custom:mac:arm64
         env:
           OPENWHISPR_CUSTOM_SOURCE_SHA: ${{ github.sha }}
+          # This package uses the public ad-hoc identity (`-`), not signing secrets.
+          # electron-builder otherwise skips all signing for pull_request events.
+          CSC_FOR_PULL_REQUEST: true
       - name: Verify custom identity and signature
         run: |
           set -euo pipefail
