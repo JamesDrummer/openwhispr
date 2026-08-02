@@ -134,7 +134,7 @@ jobs:
             --sha "$TARGET_SHA" \
             --files "$RUNNER_TEMP/upstream-changes.txt")"
           risk="$(node -e 'const r=JSON.parse(process.argv[1]); process.stdout.write(r.risk)' "$report")"
-          watched="$(node -e 'const r=JSON.parse(process.argv[1]); process.stdout.write(r.watchedChanges.join(\"\\n\") || \"None\")' "$report")"
+          watched="$(node -e 'const r=JSON.parse(process.argv[1]); process.stdout.write(r.watchedChanges.join("\n") || "None")' "$report")"
 
           git add custom/upstream-state.json custom/integration-report.json electron-builder.custom.json
           git commit -m "Merge OpenWhispr $TAG into custom build"
