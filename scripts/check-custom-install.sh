@@ -18,6 +18,7 @@ latest_source="${OPENWHISPR_CUSTOM_LATEST_SOURCE:-}"
 latest_build_url="${OPENWHISPR_CUSTOM_LATEST_BUILD_URL:-}"
 installed_source_file="${OPENWHISPR_CUSTOM_INSTALLED_SOURCE_FILE:-$HOME/Library/Application Support/OpenWhispr Custom Maintenance/installed-source-sha}"
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source_change="same"
 
 if [[ -n "$state_file" ]]; then
   state_json="$(<"$state_file")"
@@ -71,6 +72,31 @@ if [[ -z "$installed_source" && -f "$installed_source_file" ]]; then
   installed_source="$(tr -d '[:space:]' <"$installed_source_file")"
 fi
 
+if [[ -n "$installed_source" && "$installed_source" != "$latest_source" ]]; then
+  source_change="unknown"
+  if [[
+    "$installed_base" == "$latest_base" &&
+    "$installed_source" =~ ^[0-9a-fA-F]{40}$ &&
+    "$latest_source" =~ ^[0-9a-fA-F]{40}$
+  ]]; then
+    if changed_paths="$(gh api --paginate \
+      "repos/$repository/compare/$installed_source...$latest_source?per_page=100" \
+      --jq '.files[].filename')"; then
+      install_relevant="$(printf "%s\n" "$changed_paths" | node -e '
+        const fs = require("node:fs");
+        const { hasInstallRelevantChanges } = require(process.argv[1]);
+        const paths = fs.readFileSync(0, "utf8").split(/\r?\n/).filter(Boolean);
+        process.stdout.write(hasInstallRelevantChanges(paths) ? "true" : "false");
+      ' "$project_root/scripts/lib/custom-install-status.js")"
+      if [[ "$install_relevant" == "true" ]]; then
+        source_change="install-relevant"
+      else
+        source_change="maintenance-only"
+      fi
+    fi
+  fi
+fi
+
 status="$(node -e '
   const { classifyCustomInstall } = require(process.argv[1]);
   process.stdout.write(classifyCustomInstall({
@@ -78,13 +104,15 @@ status="$(node -e '
     latestBase: process.argv[3],
     installedSource: process.argv[4],
     latestSource: process.argv[5],
+    installRelevantSourceChange: process.argv[6] !== "maintenance-only",
   }));
 ' \
   "$project_root/scripts/lib/custom-install-status.js" \
   "$installed_base" \
   "$latest_base" \
   "$installed_source" \
-  "$latest_source")"
+  "$latest_source" \
+  "$source_change")"
 
 echo "status=$status"
 echo "installed_version=${installed_version:-unknown}"
@@ -93,6 +121,7 @@ echo "installed_source=${installed_source:-unknown}"
 echo "latest_release=$latest_release"
 echo "latest_base=$latest_base"
 echo "latest_source=${latest_source:-unknown}"
+echo "latest_source_change=$source_change"
 echo "latest_build_url=${latest_build_url:-unknown}"
 
 if [[ "$notify" == true && "$status" != "up-to-date" ]]; then

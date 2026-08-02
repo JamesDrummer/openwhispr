@@ -3,6 +3,8 @@ const test = require("node:test");
 
 const {
   classifyCustomInstall,
+  hasInstallRelevantChanges,
+  isInstallRelevantPath,
   normaliseOptionalSha,
 } = require("../../scripts/lib/custom-install-status");
 
@@ -31,6 +33,52 @@ test("same-upstream custom source changes are reported as updates", () => {
     }),
     "update-available"
   );
+});
+
+test("same-upstream maintenance-only changes do not advertise an app update", () => {
+  assert.equal(
+    classifyCustomInstall({
+      installedBase: BASE,
+      latestBase: BASE,
+      installedSource: SOURCE,
+      latestSource: "c".repeat(40),
+      installRelevantSourceChange: false,
+    }),
+    "up-to-date"
+  );
+});
+
+test("install relevance follows packaged inputs rather than automation metadata", () => {
+  for (const filePath of [
+    "main.js",
+    "package-lock.json",
+    "src/helpers/llamaServer.js",
+    "resources/macos-fast-paste.swift",
+    "scripts/download-llama-server.js",
+    "scripts/afterPack.js",
+  ]) {
+    assert.equal(isInstallRelevantPath(filePath), true, filePath);
+  }
+
+  for (const filePath of [
+    ".github/workflows/custom-upstream-watch.yml",
+    ".github/workflows/custom-verify.yml",
+    "CUSTOM_BUILD.md",
+    "custom/integration-report.json",
+    "scripts/check-custom-install.sh",
+    "scripts/install-custom-update-monitor.sh",
+  ]) {
+    assert.equal(isInstallRelevantPath(filePath), false, filePath);
+  }
+
+  assert.equal(
+    hasInstallRelevantChanges([
+      "CUSTOM_BUILD.md",
+      ".github/workflows/custom-upstream-watch.yml",
+    ]),
+    false
+  );
+  assert.equal(hasInstallRelevantChanges(["CUSTOM_BUILD.md", "src/updater.js"]), true);
 });
 
 test("an old app without an exact source receipt is offered the tested source-aware build", () => {

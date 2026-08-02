@@ -128,6 +128,13 @@ Its apply command is deliberately not an npm shortcut:
 bash scripts/install-custom-update-monitor.sh --apply
 ```
 
+If the monitor is already installed and needs its scripts or runtime paths
+refreshed, use the bounded repair mode:
+
+```bash
+bash scripts/install-custom-update-monitor.sh --repair
+```
+
 Applying creates one user LaunchAgent that checks at login and every 24 hours.
 It sends a macOS notification only when an installed custom app is behind the
 fork. It also re-enables the scheduled GitHub watcher if GitHub has disabled it

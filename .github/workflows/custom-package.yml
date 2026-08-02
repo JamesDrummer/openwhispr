@@ -4,6 +4,24 @@ on:
   push:
     branches:
       - custom/model-warmth
+    paths:
+      - ".nvmrc"
+      - "electron-builder.json"
+      - "electron-builder.custom.json"
+      - "main.js"
+      - "package-lock.json"
+      - "package.json"
+      - "preload.js"
+      - "resources/**"
+      - "scripts/afterPack.js"
+      - "scripts/build-*.js"
+      - "scripts/compile-macos-icon.js"
+      - "scripts/download-*.js"
+      - "scripts/lib/download-utils.js"
+      - "scripts/lib/meeting-aec-build.js"
+      - "scripts/stamp-custom-build-receipt.js"
+      - "scripts/verify-custom-macos-package.js"
+      - "src/**"
   workflow_dispatch:
 
 concurrency:
