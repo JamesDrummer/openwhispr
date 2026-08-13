@@ -2,8 +2,15 @@ import React, { createContext, useCallback, useContext, useEffect, useRef } from
 import { useSettingsStore, initializeSettings } from "../stores/settingsStore";
 import logger from "../utils/logger";
 import { useLocalStorage } from "./useLocalStorage";
-import type { LocalTranscriptionProvider, InferenceMode, SelfHostedType } from "../types/electron";
+import type {
+  ChineseScriptPreference,
+  LocalTranscriptionProvider,
+  InferenceMode,
+  SelfHostedType,
+} from "../types/electron";
 import type { Snippet } from "../utils/snippets";
+import { effectiveAudioRetentionDays } from "../stores/policyRules";
+import { usePolicyStore } from "../stores/policyStore";
 
 export interface TranscriptionSettings {
   uiLanguage: string;
@@ -15,6 +22,8 @@ export interface TranscriptionSettings {
   allowLocalFallback: boolean;
   fallbackWhisperModel: string;
   preferredLanguage: string;
+  /** When transcription language is Auto, force Chinese output script. See #975. */
+  chineseScriptPreference: ChineseScriptPreference;
   cloudTranscriptionProvider: string;
   cloudTranscriptionModel: string;
   cloudTranscriptionBaseUrl?: string;
@@ -61,6 +70,7 @@ export interface MicrophoneSettings {
   preferBuiltInMic: boolean;
   selectedMicDeviceId: string;
   selectedMicDeviceLabel: string;
+  micWarmHoldSeconds: number;
 }
 
 export interface ApiKeySettings {
@@ -171,9 +181,15 @@ function useSettingsInternal() {
 
   // Retention periods are enforced by the main process cleanup sweep
   const { audioRetentionDays, transcriptRetentionDays } = store;
+  const enforcedAudioRetentionDays = usePolicyStore((policyState) =>
+    effectiveAudioRetentionDays(policyState, audioRetentionDays)
+  );
   useEffect(() => {
-    window.electronAPI?.syncRetentionSettings?.({ audioRetentionDays, transcriptRetentionDays });
-  }, [audioRetentionDays, transcriptRetentionDays]);
+    window.electronAPI?.syncRetentionSettings?.({
+      audioRetentionDays: enforcedAudioRetentionDays,
+      transcriptRetentionDays,
+    });
+  }, [enforcedAudioRetentionDays, transcriptRetentionDays]);
 
   // Sync startup pre-warming preferences to main process
   const {
@@ -235,6 +251,7 @@ function useSettingsInternal() {
     allowLocalFallback: store.allowLocalFallback,
     fallbackWhisperModel: store.fallbackWhisperModel,
     preferredLanguage: store.preferredLanguage,
+    chineseScriptPreference: store.chineseScriptPreference,
     cloudTranscriptionProvider: store.cloudTranscriptionProvider,
     cloudTranscriptionModel: store.cloudTranscriptionModel,
     cloudTranscriptionBaseUrl: store.cloudTranscriptionBaseUrl,
@@ -281,6 +298,7 @@ function useSettingsInternal() {
     setAllowLocalFallback: store.setAllowLocalFallback,
     setFallbackWhisperModel: store.setFallbackWhisperModel,
     setPreferredLanguage: store.setPreferredLanguage,
+    setChineseScriptPreference: store.setChineseScriptPreference,
     setCloudTranscriptionProvider: store.setCloudTranscriptionProvider,
     setCloudTranscriptionModel: store.setCloudTranscriptionModel,
     setCloudTranscriptionBaseUrl: store.setCloudTranscriptionBaseUrl,
@@ -339,8 +357,10 @@ function useSettingsInternal() {
     preferBuiltInMic: store.preferBuiltInMic,
     selectedMicDeviceId: store.selectedMicDeviceId,
     selectedMicDeviceLabel: store.selectedMicDeviceLabel,
+    micWarmHoldSeconds: store.micWarmHoldSeconds,
     setPreferBuiltInMic: store.setPreferBuiltInMic,
     setSelectedMicDevice: store.setSelectedMicDevice,
+    setMicWarmHoldSeconds: store.setMicWarmHoldSeconds,
     autoLearnCorrections,
     setAutoLearnCorrections,
     showTranscriptionPreview: store.showTranscriptionPreview,
