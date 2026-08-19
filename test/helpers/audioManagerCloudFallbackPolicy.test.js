@@ -167,6 +167,35 @@ test("cloud->local fallback under org policy", async (t) => {
   });
 });
 
+test("local Whisper keeps custom dictionary out of decoder context", async (t) => {
+  const { window, setSettings, createManager } = await loadAudioManager(t, {
+    cachePrefix: "openwhispr-local-dictionary-prompt-test-",
+    settingsKey: "__localDictionaryPromptSettings",
+  });
+
+  setSettings({});
+  const calls = [];
+  window.electronAPI.transcribeLocalWhisper = async (_audio, options) => {
+    calls.push(options);
+    return { success: true, text: "OpenWhispr works normally" };
+  };
+
+  const manager = createManager({
+    getWhisperPrompt: () => "OpenWhispr, n8n, BHDA",
+  });
+  const audioBlob = {
+    type: "audio/webm",
+    size: 1024,
+    arrayBuffer: async () => new ArrayBuffer(8),
+  };
+
+  const result = await manager.processWithLocalWhisper(audioBlob, "medium");
+
+  assert.equal(result.success, true);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0], { model: "medium" });
+});
+
 test("managed custom transcription never falls through to OpenAI", async (t) => {
   const { vite, setSettings, createManager } = await loadAudioManager(t, {
     cachePrefix: "openwhispr-managed-custom-endpoint-test-",

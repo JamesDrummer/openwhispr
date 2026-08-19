@@ -1844,11 +1844,9 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         options.language = language;
       }
 
-      // Add custom dictionary as initial prompt to help Whisper recognize specific words
-      const dictionaryPrompt = this.getWhisperPrompt();
-      if (dictionaryPrompt) {
-        options.initialPrompt = dictionaryPrompt;
-      }
+      // Keep dictionary terms out of whisper.cpp's decoder context. A non-empty
+      // initial prompt can truncate otherwise valid dictations without looking
+      // like a dictionary echo. The cleanup model still receives these terms.
 
       logger.debug(
         "Local transcription starting",
