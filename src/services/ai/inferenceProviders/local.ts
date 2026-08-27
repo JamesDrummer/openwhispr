@@ -1,6 +1,7 @@
 import type { InferenceProvider } from "./types";
 import { wrapCleanupTranscript } from "../../../config/prompts";
 import logger from "../../../utils/logger";
+import { resolveLocalInferenceTemperature } from "../../../helpers/localInferenceConfig.js";
 
 export const localProvider: InferenceProvider = {
   id: "local",
@@ -18,6 +19,9 @@ export const localProvider: InferenceProvider = {
     const userContent = config.systemPrompt ? text : wrapCleanupTranscript(text);
     const result = await window.electronAPI.processLocalReasoning(userContent, model, agentName, {
       ...config,
+      // Match the deterministic cleanup behaviour used by remote providers.
+      // Agent/custom-prompt calls retain their modest creative default.
+      temperature: resolveLocalInferenceTemperature(config),
       systemPrompt,
     });
 

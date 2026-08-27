@@ -32,6 +32,7 @@ import { clearTinfoilClientCache } from "./ai/tinfoilClient";
 import { resolveChatRoute } from "../helpers/chatRouting";
 import { assertAgentAllowedByPolicy, assertReasoningAllowedByPolicy } from "./reasoningPolicy";
 import type { InferenceMode } from "../types/electron";
+import { isSuspiciouslyTruncatedCleanup } from "../helpers/cleanupResultGuard.js";
 
 export type ToolMetadata = Record<string, unknown> | Array<Record<string, unknown>>;
 
@@ -492,13 +493,36 @@ class ReasoningService extends BaseReasoningService {
 
     const startTime = Date.now();
     try {
-      const result = await handler.call({
+      let result = await handler.call({
         text,
         model: trimmedModel,
         agentName,
         config: dispatchConfig,
         ctx: this.providerContext,
       });
+
+      // A cold local model can occasionally return only a fragment on its first
+      // cleanup request. Retry once automatically; if it still discards most of
+      // a substantial transcript, preserve the raw transcription instead.
+      if (
+        providerId === "local" &&
+        !dispatchConfig.systemPrompt &&
+        isSuspiciouslyTruncatedCleanup(text, result)
+      ) {
+        logger.logReasoning("LOCAL_CLEANUP_TRUNCATED_RETRY", {
+          model: trimmedModel,
+          rawLength: text.length,
+          resultLength: result.length,
+        });
+        const retryResult = await handler.call({
+          text,
+          model: trimmedModel,
+          agentName,
+          config: dispatchConfig,
+          ctx: this.providerContext,
+        });
+        result = isSuspiciouslyTruncatedCleanup(text, retryResult) ? text : retryResult;
+      }
 
       logger.logReasoning("PROVIDER_SUCCESS", {
         provider: providerId,
