@@ -406,7 +406,7 @@ test("legacy migration: lib-free pack is moved, lib-carrying packs are cleared f
   const cuda = new WhisperCudaManager();
   const vulkan = new WhisperVulkanManager();
   const llama = new LlamaVulkanManager();
-  migrateLegacyBinDir([cuda, vulkan, llama]);
+  const clearedPacks = migrateLegacyBinDir([cuda, vulkan, llama]);
 
   assert.equal(vulkan.isDownloaded(), true, "statically-linked pack migrated in place");
   assert.ok(fs.existsSync(path.join(binRoot, "whisper-vulkan", "whisper-server-linux-x64-vulkan")));
@@ -417,10 +417,63 @@ test("legacy migration: lib-free pack is moved, lib-carrying packs are cleared f
     ["whisper-vulkan"],
     "legacy binaries and orphaned libs removed"
   );
+  assert.deepEqual(
+    clearedPacks,
+    ["CUDA whisper", "Vulkan llama"],
+    "cleared (not migrated) packs are reported for the re-download notice"
+  );
 
-  // Idempotent on the healed layout
-  migrateLegacyBinDir([cuda, vulkan, llama]);
+  // Idempotent on the healed layout — and nothing left to report
+  assert.deepEqual(migrateLegacyBinDir([cuda, vulkan, llama]), []);
   assert.equal(vulkan.isDownloaded(), true);
+});
+
+test("orphan detection: enabled flag with no pack on disk is reported for the notice", () => {
+  const { detectOrphanedGpuPacks } = GpuBinaryManager;
+  const packs = [
+    { manager: new WhisperCudaManager(), enabledEnvVar: "WHISPER_CUDA_ENABLED" },
+    { manager: new WhisperVulkanManager(), enabledEnvVar: "WHISPER_VULKAN_ENABLED" },
+  ];
+
+  try {
+    // User never enabled GPU (missing flag) — nothing reported
+    assert.deepEqual(detectOrphanedGpuPacks(packs), []);
+
+    process.env.WHISPER_CUDA_ENABLED = "true";
+    process.env.WHISPER_VULKAN_ENABLED = "false";
+    assert.deepEqual(detectOrphanedGpuPacks(packs), ["CUDA whisper"]);
+
+    // Pack present on disk — enabled but not orphaned
+    seedPack("whisper-cuda", ["whisper-server-linux-x64-cuda"]);
+    assert.deepEqual(detectOrphanedGpuPacks(packs), []);
+
+    process.env.WHISPER_VULKAN_ENABLED = "true";
+    assert.deepEqual(detectOrphanedGpuPacks(packs), ["Vulkan whisper"]);
+
+    // The lib-carrying llama Vulkan pack (also deleted by the 1.8.3
+    // migration) is detected through the same shape
+    const llamaPacks = [
+      { manager: new LlamaVulkanManager(), enabledEnvVar: "LLAMA_VULKAN_ENABLED" },
+    ];
+    assert.deepEqual(detectOrphanedGpuPacks(llamaPacks), []);
+    process.env.LLAMA_VULKAN_ENABLED = "true";
+    assert.deepEqual(detectOrphanedGpuPacks(llamaPacks), ["Vulkan llama"]);
+    seedPack("llama-vulkan", ["llama-server-vulkan"]);
+    assert.deepEqual(detectOrphanedGpuPacks(llamaPacks), []);
+
+    // Unsupported platform can't re-download the pack — never reported
+    const unsupported = new GpuBinaryManager({ name: "none", dirName: "none", assets: {} });
+    process.env.NONE_ENABLED = "true";
+    assert.deepEqual(
+      detectOrphanedGpuPacks([{ manager: unsupported, enabledEnvVar: "NONE_ENABLED" }]),
+      []
+    );
+  } finally {
+    delete process.env.WHISPER_CUDA_ENABLED;
+    delete process.env.WHISPER_VULKAN_ENABLED;
+    delete process.env.LLAMA_VULKAN_ENABLED;
+    delete process.env.NONE_ENABLED;
+  }
 });
 
 test("getStatus reflects supported/downloaded/downloading", async () => {
