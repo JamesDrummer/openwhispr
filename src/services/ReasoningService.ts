@@ -14,6 +14,7 @@ import logger from "../utils/logger";
 import { getSettings, isCloudCleanupMode } from "../stores/settingsStore";
 import { wrapCleanupTranscript } from "../config/prompts";
 import { stripThinkingTags } from "../helpers/stripThinking.js";
+import { getLlmRequestTimeoutSeconds } from "../helpers/llmRequestTimeout.js";
 import { streamText, stepCountIs } from "ai";
 import { getAIModel } from "./ai/providers";
 import { createEnterpriseChatModel } from "./ai/enterpriseChatModel";
@@ -25,8 +26,14 @@ import {
   resolveConfiguredOpenAIBase,
   resolveSelfHostedOpenAIBase,
 } from "./ai/openaiBase";
-import { applyThinkingSuppression } from "./ai/thinkingSuppression";
+import {
+  applyChatCompletionsParams,
+  fetchWithParamFallback,
+  isTruncatedFinishReason,
+} from "./ai/chatRequestBody";
+import { getModelFamilyConstraints } from "./ai/modelFamilyConstraints";
 import { detectEndpointDialect } from "./ai/thinkingSuppressionDialects";
+import { createStreamingThinkFilter } from "./ai/streamingThinkFilter";
 import { extractApiErrorMessage } from "./ai/apiErrorMessage";
 import { clearTinfoilClientCache } from "./ai/tinfoilClient";
 import { resolveChatRoute } from "../helpers/chatRouting";
@@ -90,20 +97,9 @@ function assertAgentSessionAllowedByPolicy(provider: string, mode: InferenceMode
   assertReasoningAllowedByPolicy(provider, mode);
 }
 
-// Old Ollama/strict proxies reject the `reasoning` object; drop it and retry once.
-async function fetchWithReasoningFieldFallback(
-  doFetch: () => Promise<Response>,
-  requestBody: Record<string, unknown>,
-  logEvent: string
-): Promise<Response> {
-  let res = await doFetch();
-  if (!res.ok && (res.status === 400 || res.status === 422) && requestBody.reasoning) {
-    logger.logReasoning(logEvent, { status: res.status });
-    delete requestBody.reasoning;
-    void res.body?.cancel();
-    res = await doFetch();
-  }
-  return res;
+function logParamFallback(logEvent: string) {
+  return (details: { status: number; stripped: string[] }) =>
+    logger.logReasoning(logEvent, details);
 }
 
 class ReasoningService extends BaseReasoningService {
@@ -111,6 +107,10 @@ class ReasoningService extends BaseReasoningService {
   private static readonly MAX_TOOL_STEPS = 20;
   private cacheCleanupStop: (() => void) | undefined;
   private streamAbortController: AbortController | null = null;
+  private activeRequestControllers = new Set<AbortController>();
+  private activeCloudStream: { requestId: string; cancel: () => void } | null = null;
+  private cloudOperationGeneration = 0;
+  private requestCancellationGeneration = 0;
 
   private readonly providerContext: ProviderContext;
 
@@ -289,11 +289,13 @@ class ReasoningService extends BaseReasoningService {
       { role: "user", content: userPrompt },
     ];
 
-    const requestBody: any = {
+    const requestBody: any = { model, messages };
+    applyChatCompletionsParams(requestBody, {
       model,
-      messages,
-      temperature: config.temperature ?? (isCleanup ? 0 : 0.3),
-      max_tokens:
+      provider: providerName,
+      endpoint,
+      config,
+      maxTokens:
         config.maxTokens ||
         Math.max(
           4096,
@@ -304,19 +306,7 @@ class ReasoningService extends BaseReasoningService {
             TOKEN_LIMITS.TOKEN_MULTIPLIER
           )
         ),
-    };
-
-    // gpt-oss defaults to medium reasoning effort; low cuts hidden reasoning
-    // tokens (latency) and the tendency to answer the transcript instead of
-    // cleaning it. Selection edits need it too: at higher efforts Groq's
-    // gpt-oss can leave the whole reply in the reasoning channel and return
-    // whitespace content, failing the edit. applyThinkingSuppression still
-    // wins when thinking is disabled by the user.
-    if ((isCleanup || config.requireCompleteOutput) && model.includes("gpt-oss")) {
-      requestBody.reasoning_effort = "low";
-    }
-
-    applyThinkingSuppression(requestBody, model, providerName, config, endpoint);
+    });
 
     logger.logReasoning(`${providerName.toUpperCase()}_REQUEST`, {
       endpoint,
@@ -325,9 +315,15 @@ class ReasoningService extends BaseReasoningService {
       requestBody: JSON.stringify(requestBody).substring(0, 200),
     });
 
+    const requestGeneration = this.requestCancellationGeneration;
     const response = await withRetry(async () => {
+      if (requestGeneration !== this.requestCancellationGeneration) {
+        throw httpError("Request cancelled", 499);
+      }
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000);
+      this.activeRequestControllers.add(controller);
+      const timeoutSeconds = getLlmRequestTimeoutSeconds();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutSeconds * 1000);
       try {
         const headers: Record<string, string> = {
           "Content-Type": "application/json",
@@ -336,7 +332,7 @@ class ReasoningService extends BaseReasoningService {
           headers["Authorization"] = `Bearer ${apiKey}`;
         }
 
-        const res = await fetchWithReasoningFieldFallback(
+        const res = await fetchWithParamFallback(
           () =>
             fetch(endpoint, {
               method: "POST",
@@ -345,7 +341,7 @@ class ReasoningService extends BaseReasoningService {
               signal: controller.signal,
             }),
           requestBody,
-          `${providerName.toUpperCase()}_REASONING_FIELD_RETRY`
+          logParamFallback(`${providerName.toUpperCase()}_PARAM_FALLBACK`)
         );
 
         if (!res.ok) {
@@ -386,11 +382,15 @@ class ReasoningService extends BaseReasoningService {
         return jsonResponse;
       } catch (error) {
         if ((error as Error).name === "AbortError") {
-          throw new Error("Request timed out after 30s");
+          if (requestGeneration !== this.requestCancellationGeneration) {
+            throw httpError("Request cancelled", 499);
+          }
+          throw new Error(`Request timed out after ${timeoutSeconds}s`);
         }
         throw error;
       } finally {
         clearTimeout(timeoutId);
+        this.activeRequestControllers.delete(controller);
       }
     }, createApiRetryStrategy());
 
@@ -405,7 +405,7 @@ class ReasoningService extends BaseReasoningService {
     }
 
     const choice = response.choices[0];
-    if (config.requireCompleteOutput && ["length", "max_tokens"].includes(choice?.finish_reason)) {
+    if (config.requireCompleteOutput && isTruncatedFinishReason(choice?.finish_reason)) {
       throw new Error("Model output was truncated before the selection edit completed");
     }
     // Reasoning models leak <think> blocks into non-streamed output; strip them
@@ -548,6 +548,24 @@ class ReasoningService extends BaseReasoningService {
     provider: string,
     config: ReasoningConfig & { systemPrompt: string }
   ): AsyncGenerator<string, void, unknown> {
+    const abortController = new AbortController();
+    this.streamAbortController = abortController;
+    try {
+      yield* this.processTextStreamingRaw(messages, model, provider, config, abortController);
+    } finally {
+      if (this.streamAbortController === abortController) {
+        this.streamAbortController = null;
+      }
+    }
+  }
+
+  private async *processTextStreamingRaw(
+    messages: Array<{ role: string; content: string }>,
+    model: string,
+    provider: string,
+    config: ReasoningConfig & { systemPrompt: string },
+    abortController: AbortController
+  ): AsyncGenerator<string, void, unknown> {
     const route = resolveChatRoute({
       provider,
       lanUrl: config.lanUrl,
@@ -595,9 +613,7 @@ class ReasoningService extends BaseReasoningService {
       );
     }
 
-    // A known endpoint host knows its own request shape better than the model id does.
-    const apiConfig = detectEndpointDialect(endpoint) ?? getOpenAiApiConfig(model, provider);
-    const useOldTokenParam = isLocalProvider || isLanChat || provider === "groq";
+    if (abortController.signal.aborted) return;
 
     const requestBody: Record<string, unknown> = {
       model,
@@ -605,19 +621,13 @@ class ReasoningService extends BaseReasoningService {
       stream: true,
     };
 
-    const maxTokens = config.maxTokens || Math.max(4096, TOKEN_LIMITS.MAX_TOKENS);
-
-    if (useOldTokenParam) {
-      requestBody.temperature = config.temperature ?? 0.3;
-      requestBody.max_tokens = maxTokens;
-    } else {
-      requestBody[apiConfig.tokenParam] = maxTokens;
-      if (apiConfig.supportsTemperature) {
-        requestBody.temperature = config.temperature ?? 0.3;
-      }
-    }
-
-    applyThinkingSuppression(requestBody, model, isLanChat ? "lan" : provider, config, endpoint);
+    applyChatCompletionsParams(requestBody, {
+      model,
+      provider: isLanChat ? "lan" : isLocalProvider ? "local" : provider,
+      endpoint,
+      config,
+      maxTokens: config.maxTokens || Math.max(4096, TOKEN_LIMITS.MAX_TOKENS),
+    });
 
     logger.logReasoning("AGENT_STREAM_REQUEST", {
       endpoint,
@@ -635,32 +645,38 @@ class ReasoningService extends BaseReasoningService {
       headers["Authorization"] = `Bearer ${apiKey}`;
     }
 
-    this.streamAbortController = new AbortController();
-    const controller = this.streamAbortController;
-    const timeoutId = setTimeout(() => controller.abort(), 60000);
+    const timeoutSeconds = getLlmRequestTimeoutSeconds({ streaming: true });
+    let timeoutTriggered = false;
+    const timeoutId = setTimeout(() => {
+      if (abortController.signal.aborted) return;
+      timeoutTriggered = true;
+      abortController.abort();
+    }, timeoutSeconds * 1000);
 
     let response: Response;
     try {
-      response = await fetchWithReasoningFieldFallback(
+      response = await fetchWithParamFallback(
         () =>
           fetch(endpoint, {
             method: "POST",
             headers,
             body: JSON.stringify(requestBody),
-            signal: controller.signal,
+            signal: abortController.signal,
           }),
         requestBody,
-        "AGENT_STREAM_REASONING_FIELD_RETRY"
+        logParamFallback("AGENT_STREAM_PARAM_FALLBACK")
       );
     } catch (error) {
       clearTimeout(timeoutId);
-      if ((error as Error).name === "AbortError") {
+      if ((error as Error).name === "AbortError" && abortController.signal.aborted) {
+        if (!timeoutTriggered) return;
         throw new Error("Streaming request timed out");
       }
       throw error;
     }
 
     if (!response.ok) {
+      clearTimeout(timeoutId);
       const errorText = await response.text();
       let errorMessage: string;
       try {
@@ -674,11 +690,15 @@ class ReasoningService extends BaseReasoningService {
     }
 
     const reader = response.body?.getReader();
-    if (!reader) throw new Error("No response body");
+    if (!reader) {
+      clearTimeout(timeoutId);
+      throw new Error("No response body");
+    }
 
     const decoder = new TextDecoder();
     let buffer = "";
-    let insideThinkBlock = false;
+    const stripThinking = (isLocalProvider || isLanChat) && config.disableThinking !== false;
+    const filterThinkTags = stripThinking ? createStreamingThinkFilter() : null;
 
     try {
       while (true) {
@@ -694,37 +714,19 @@ class ReasoningService extends BaseReasoningService {
           if (!trimmed || !trimmed.startsWith("data: ")) continue;
 
           const data = trimmed.slice(6);
-          if (data === "[DONE]") return;
+          if (data === "[DONE]") {
+            const trailing = filterThinkTags?.finish();
+            if (trailing) yield trailing;
+            return;
+          }
 
           try {
             const parsed = JSON.parse(data);
             let content = parsed.choices?.[0]?.delta?.content;
             if (!content) continue;
 
-            const stripThinking =
-              (isLocalProvider || isLanChat) && config.disableThinking !== false;
-            if (stripThinking) {
-              if (insideThinkBlock) {
-                const endIdx = content.indexOf("</think>");
-                if (endIdx !== -1) {
-                  insideThinkBlock = false;
-                  content = content.slice(endIdx + 8);
-                } else {
-                  continue;
-                }
-              }
-              const startIdx = content.indexOf("<think>");
-              if (startIdx !== -1) {
-                const before = content.slice(0, startIdx);
-                const after = content.slice(startIdx + 7);
-                const endIdx = after.indexOf("</think>");
-                if (endIdx !== -1) {
-                  content = before + after.slice(endIdx + 8);
-                } else {
-                  insideThinkBlock = true;
-                  content = before;
-                }
-              }
+            if (filterThinkTags) {
+              content = filterThinkTags(content);
               if (!content) continue;
             }
 
@@ -734,15 +736,25 @@ class ReasoningService extends BaseReasoningService {
           }
         }
       }
+
+      const trailing = filterThinkTags?.finish();
+      if (trailing) yield trailing;
+    } catch (error) {
+      if ((error as Error).name === "AbortError" && abortController.signal.aborted) {
+        if (!timeoutTriggered) return;
+        throw new Error("Streaming request timed out");
+      }
+      throw error;
     } finally {
       clearTimeout(timeoutId);
-      this.streamAbortController = null;
       reader.releaseLock();
     }
   }
 
   async *processTextStreamingAI(
-    messages: Array<{ role: string; content: string }>,
+    // Content is a string, or text+image parts when a screenshot rides along
+    // (image-capable BYOK providers only — the caller drops it elsewhere).
+    messages: Array<{ role: string; content: string | Array<Record<string, unknown>> }>,
     model: string,
     provider: string,
     config: ReasoningConfig & { systemPrompt: string },
@@ -769,19 +781,43 @@ class ReasoningService extends BaseReasoningService {
             ? "local"
             : "providers";
     assertAgentSessionAllowedByPolicy(provider, mode);
+    // Both streaming transports share this owner so cancellation survives
+    // asynchronous server, key, and model setup.
+    const abortController = new AbortController();
+    this.streamAbortController = abortController;
     const isEnterprise = route.kind === "enterprise";
     const isLocalProvider = route.kind === "local";
     const isLanChat = route.kind === "self-hosted";
 
     if ((isLocalProvider || isLanChat) && !tools) {
-      const contentGen = this.processTextStreaming(messages, model, provider, config);
-      for await (const text of contentGen) {
-        yield { type: "content", text };
+      // Attachments are never routed to local/LAN providers, so content is string-only here.
+      try {
+        const contentGen = this.processTextStreamingRaw(
+          messages as Array<{ role: string; content: string }>,
+          model,
+          provider,
+          config,
+          abortController
+        );
+        for await (const text of contentGen) {
+          yield { type: "content", text };
+        }
+        yield { type: "done", finishReason: "stop" };
+      } catch (error) {
+        if (abortController.signal.aborted && (error as Error).name === "AbortError") return;
+        throw error;
+      } finally {
+        if (this.streamAbortController === abortController) {
+          this.streamAbortController = null;
+        }
       }
-      yield { type: "done", finishReason: "stop" };
       return;
     }
 
+    const filterThinkTags =
+      (isLocalProvider || isLanChat) && config.disableThinking !== false
+        ? createStreamingThinkFilter()
+        : null;
     let apiKey = "";
     let baseURL: string | undefined;
 
@@ -811,6 +847,11 @@ class ReasoningService extends BaseReasoningService {
           disableThinking: openrouterDisableThinking,
         });
 
+    if (abortController.signal.aborted) {
+      yield { type: "done", finishReason: "stop" };
+      return;
+    }
+
     const apiConfig = detectEndpointDialect(baseURL) ?? getOpenAiApiConfig(model, provider);
     const modelDef = getCloudModel(model);
     const userSuppressesThinking = config.disableThinking === true && !!modelDef?.supportsThinking;
@@ -818,7 +859,15 @@ class ReasoningService extends BaseReasoningService {
       provider === "groq" && (modelDef?.disableThinking || userSuppressesThinking);
     const needsGeminiMinimalThinking = provider === "gemini" && userSuppressesThinking;
     const providerOptions = {
-      ...(needsGroqDisableThinking ? { groq: { reasoningEffort: "none" } } : {}),
+      // The effort value is a family fact: gpt-oss has no "none" (#1611).
+      ...(needsGroqDisableThinking
+        ? {
+            groq: {
+              reasoningEffort:
+                getModelFamilyConstraints(model)?.reasoningEffort?.suppressValue ?? "none",
+            },
+          }
+        : {}),
       ...(needsGeminiMinimalThinking
         ? { google: { thinkingConfig: { thinkingLevel: "minimal", includeThoughts: false } } }
         : {}),
@@ -835,17 +884,12 @@ class ReasoningService extends BaseReasoningService {
 
     const useTemperature = isLocalProvider || isLanChat || apiConfig.supportsTemperature;
 
-    // cancelActiveStream() aborts this controller; streamText propagates it
-    // into doStream, cancelling the enterprise IPC proxy's request in main.
-    const abortController = new AbortController();
-    this.streamAbortController = abortController;
-
     const result = streamText({
       model: aiModel,
       messages: messages.map((m) => ({
         role: m.role as "system" | "user" | "assistant",
         content: m.content,
-      })),
+      })) as import("ai").ModelMessage[],
       tools: tools || undefined,
       stopWhen: stepCountIs(tools ? ReasoningService.MAX_TOOL_STEPS : 1),
       abortSignal: abortController.signal,
@@ -854,10 +898,20 @@ class ReasoningService extends BaseReasoningService {
       ...(hasProviderOptions ? { providerOptions } : {}),
     });
 
+    let canFlushFilteredText = true;
+    const finishFilteredText = (): string => {
+      const trailing = filterThinkTags?.finish() ?? "";
+      return canFlushFilteredText ? trailing : "";
+    };
+
     try {
       for await (const chunk of result.fullStream) {
         if (chunk.type === "text-delta") {
-          yield { type: "content", text: chunk.text };
+          const text = filterThinkTags ? filterThinkTags(chunk.text) : chunk.text;
+          if (text) yield { type: "content", text };
+        } else if (chunk.type === "text-end" || chunk.type === "finish-step") {
+          const trailing = finishFilteredText();
+          if (trailing) yield { type: "content", text: trailing };
         } else if (chunk.type === "tool-call") {
           yield {
             type: "tool_calls",
@@ -879,11 +933,28 @@ class ReasoningService extends BaseReasoningService {
             toolName: chunk.toolName,
             displayText,
           };
+        } else if (chunk.type === "abort") {
+          canFlushFilteredText = false;
+          finishFilteredText();
+        } else if (chunk.type === "error") {
+          // streamText reports provider failures as error parts and then ends
+          // the stream; swallowing them leaves callers with an empty reply and
+          // no terminal signal. Re-throw unless we aborted on purpose.
+          canFlushFilteredText = false;
+          finishFilteredText();
+          if (!abortController.signal.aborted) {
+            const cause = (chunk as { error?: unknown }).error;
+            throw cause instanceof Error ? cause : new Error(String(cause ?? "Stream failed"));
+          }
         } else if (chunk.type === "finish") {
+          const trailing = finishFilteredText();
+          if (trailing) yield { type: "content", text: trailing };
           yield { type: "done", finishReason: chunk.finishReason };
         }
       }
     } catch (error) {
+      canFlushFilteredText = false;
+      finishFilteredText();
       if (abortController.signal.aborted) {
         yield { type: "done", finishReason: "stop" };
         return;
@@ -896,9 +967,28 @@ class ReasoningService extends BaseReasoningService {
     }
   }
 
+  /** Aborts the chat/agent stream only (panel Esc, chat surface unmount). */
   cancelActiveStream(): void {
+    this.cloudOperationGeneration += 1;
     this.streamAbortController?.abort();
     this.streamAbortController = null;
+    const activeCloudStream = this.activeCloudStream;
+    this.activeCloudStream = null;
+    activeCloudStream?.cancel();
+  }
+
+  /**
+   * Aborts everything in flight in this renderer: the chat stream plus every
+   * single-shot request (cleanup, selection edit, titles) and the cloud-reason
+   * IPC jobs. Used by the dictation cancel path, never by chat lifecycle —
+   * a note or tab switch must not kill unrelated reasoning work.
+   */
+  cancelAllRequests(): void {
+    this.requestCancellationGeneration += 1;
+    for (const controller of this.activeRequestControllers) controller.abort();
+    this.activeRequestControllers.clear();
+    if (typeof window !== "undefined") window.electronAPI?.cancelCloudReason?.();
+    this.cancelActiveStream();
   }
 
   private streamFromIPC(
@@ -906,19 +996,24 @@ class ReasoningService extends BaseReasoningService {
     opts: {
       systemPrompt?: string;
       tools?: Array<{ name: string; description: string; parameters: Record<string, unknown> }>;
+      // Press-time screenshot; the server routes to its vision chain when present.
+      screenContext?: { data: string; mediaType: string };
     }
-  ): AsyncGenerator<
-    {
-      type: string;
-      text?: string;
-      id?: string;
-      name?: string;
-      arguments?: string;
-      finishReason?: string;
-    },
-    void,
-    unknown
-  > {
+  ): {
+    stream: AsyncGenerator<
+      {
+        type: string;
+        text?: string;
+        id?: string;
+        name?: string;
+        arguments?: string;
+        finishReason?: string;
+      },
+      void,
+      unknown
+    >;
+    wasCancelled: () => boolean;
+  } {
     type StreamEvent = {
       type: string;
       text?: string;
@@ -929,29 +1024,51 @@ class ReasoningService extends BaseReasoningService {
     };
     const queue: Array<StreamEvent | { type: "__error"; error: string } | { type: "__end" }> = [];
     let resolve: (() => void) | null = null;
+    let cancelled = false;
+    let closed = false;
+    const requestId = crypto.randomUUID();
+    const electronAPI = window.electronAPI;
 
-    const cleanupChunk = window.electronAPI?.onAgentStreamChunk?.((chunk) => {
-      queue.push(chunk);
+    this.activeCloudStream?.cancel();
+
+    const cleanupChunk = electronAPI?.onAgentStreamChunk?.((payload) => {
+      if (payload.requestId !== requestId || closed || cancelled) return;
+      queue.push(payload.chunk);
       resolve?.();
     });
-    const cleanupError = window.electronAPI?.onAgentStreamError?.((err) => {
-      queue.push({ type: "__error", error: err.error });
+    const cleanupError = electronAPI?.onAgentStreamError?.((payload) => {
+      if (payload.requestId !== requestId || closed || cancelled) return;
+      queue.push({ type: "__error", error: payload.error });
       resolve?.();
     });
-    const cleanupEnd = window.electronAPI?.onAgentStreamEnd?.(() => {
+    const cleanupEnd = electronAPI?.onAgentStreamEnd?.((payload) => {
+      if (payload.requestId !== requestId || closed || cancelled) return;
       queue.push({ type: "__end" });
       resolve?.();
     });
 
     const cleanup = () => {
+      if (closed) return;
+      closed = true;
       cleanupChunk?.();
       cleanupError?.();
       cleanupEnd?.();
+      if (this.activeCloudStream?.requestId === requestId) this.activeCloudStream = null;
     };
 
-    window.electronAPI?.startAgentStream?.(messages, opts);
+    const cancel = () => {
+      if (closed || cancelled) return;
+      cancelled = true;
+      electronAPI?.cancelAgentStream?.(requestId);
+      queue.length = 0;
+      queue.push({ type: "__end" });
+      resolve?.();
+    };
+    this.activeCloudStream = { requestId, cancel };
 
-    const generator = async function* () {
+    electronAPI?.startAgentStream?.(requestId, messages, opts);
+
+    const generator = (async function* () {
       try {
         while (true) {
           if (queue.length === 0) {
@@ -971,32 +1088,54 @@ class ReasoningService extends BaseReasoningService {
       } finally {
         cleanup();
       }
-    };
+    })();
 
-    return generator();
+    return { stream: generator, wasCancelled: () => cancelled };
   }
 
-  async *processTextStreamingCloud(
+  processTextStreamingCloud(
     messages: Array<{ role: string; content: string | Array<unknown> }>,
     config: {
       systemPrompt: string;
       tools?: Array<{ name: string; description: string; parameters: Record<string, unknown> }>;
       executeToolCall?: (name: string, args: string) => Promise<ToolExecutionResult>;
+      screenContext?: { data: string; mediaType: string };
     }
   ): AsyncGenerator<AgentStreamChunk, void, unknown> {
+    // Capture synchronously so a cancel before the first next() is observed.
+    const operationGeneration = ++this.cloudOperationGeneration;
+    return this._processTextStreamingCloud(messages, config, operationGeneration);
+  }
+
+  private async *_processTextStreamingCloud(
+    messages: Array<{ role: string; content: string | Array<unknown> }>,
+    config: {
+      systemPrompt: string;
+      tools?: Array<{ name: string; description: string; parameters: Record<string, unknown> }>;
+      executeToolCall?: (name: string, args: string) => Promise<ToolExecutionResult>;
+      screenContext?: { data: string; mediaType: string };
+    },
+    operationGeneration: number
+  ): AsyncGenerator<AgentStreamChunk, void, unknown> {
     assertAgentSessionAllowedByPolicy("openwhispr", "openwhispr");
+    const operationWasCancelled = (): boolean =>
+      operationGeneration !== this.cloudOperationGeneration;
     const maxSteps = config.tools?.length ? ReasoningService.MAX_TOOL_STEPS : 1;
     let currentMessages = [...messages];
 
     for (let step = 0; step < maxSteps; step++) {
-      const stream = this.streamFromIPC(currentMessages, {
+      if (operationWasCancelled()) return;
+      // The screenshot rides every step of the tool loop so the model keeps
+      // its vision after tool results come back.
+      const ipcStream = this.streamFromIPC(currentMessages, {
         systemPrompt: config.systemPrompt,
         tools: config.tools,
+        screenContext: config.screenContext,
       });
 
       const pendingToolCalls: Array<{ id: string; name: string; arguments: string }> = [];
 
-      for await (const ev of stream) {
+      for await (const ev of ipcStream.stream) {
         if (ev.type === "content") {
           yield { type: "content", text: ev.text as string };
         } else if (ev.type === "tool_call") {
@@ -1010,12 +1149,15 @@ class ReasoningService extends BaseReasoningService {
         }
       }
 
+      if (ipcStream.wasCancelled() || operationWasCancelled()) return;
+
       if (pendingToolCalls.length === 0 || !config.executeToolCall) {
         yield { type: "done", finishReason: "stop" };
         return;
       }
 
       for (const call of pendingToolCalls) {
+        if (operationWasCancelled()) return;
         let toolResult: ToolExecutionResult;
         try {
           toolResult = await config.executeToolCall(call.name, call.arguments);
@@ -1023,6 +1165,7 @@ class ReasoningService extends BaseReasoningService {
           const errMsg = `Error: ${(error as Error).message}`;
           toolResult = { data: errMsg, displayText: errMsg };
         }
+        if (operationWasCancelled()) return;
         yield {
           type: "tool_result",
           callId: call.id,
@@ -1059,6 +1202,7 @@ class ReasoningService extends BaseReasoningService {
       }
     }
 
+    if (operationWasCancelled()) return;
     yield { type: "done", finishReason: "stop" };
   }
 
@@ -1181,7 +1325,7 @@ class ReasoningService extends BaseReasoningService {
   }
 
   destroy(): void {
-    this.cancelActiveStream();
+    this.cancelAllRequests();
     if (this.cacheCleanupStop) {
       this.cacheCleanupStop();
     }

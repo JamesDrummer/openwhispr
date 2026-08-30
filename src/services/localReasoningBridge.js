@@ -39,6 +39,7 @@ class LocalReasoningService {
         repeatPenalty: config.repeatPenalty ?? 1.1,
         systemPrompt: config.systemPrompt ?? "",
         disableThinking: config.disableThinking !== false,
+        requireCompleteOutput: config.requireCompleteOutput,
       };
 
       debugLogger.logReasoning("LOCAL_BRIDGE_INFERENCE", {
@@ -49,10 +50,7 @@ class LocalReasoningService {
       const result = await modelManager.runInference(modelId, text, inferenceConfig);
       const stripThinking = config.disableThinking !== false;
       const cleanResult = stripThinking
-        ? result
-            .replace(/<think>[\s\S]*?<\/think>/g, "")
-            .replace(/<think>[\s\S]*$/, "")
-            .trim()
+        ? (await import("../helpers/stripThinking.js")).stripThinkingTags(result)
         : result.trim();
 
       const processingTime = Date.now() - startTime;
