@@ -137,13 +137,14 @@ export const useAudioRecording = (toast, options = {}) => {
         // Preserve the requested identity while Windows is still opening the
         // microphone; AudioManager confirms the same value once recording.
         setIsAssistantVoice(voiceAgentRequested);
+
+        // Microphone acquisition and pre-roll must begin at the input event,
+        // before waiting for the pill to paint. Waiting first reintroduced a
+        // cold-start window where speech could not enter the pre-roll buffer.
+        // PreparedMicCapture deduplicates this with the key-down preparation.
+        void audioManagerRef.current.prepareMicCapture?.();
         await waitForVisualFrames();
         if (preparationGeneration !== preparationGenerationRef.current) return false;
-
-        // Start acquisition only after the compact thinking frame has reached
-        // the compositor. startRecording() joins this prepared capture, so the
-        // device still opens exactly once.
-        void audioManagerRef.current.prepareMicCapture?.();
 
         // The floating dictation panel is non-focusable, so the foreground app is
         // still the user's actual editing target here. Refresh it for recordings
@@ -720,15 +721,17 @@ export const useAudioRecording = (toast, options = {}) => {
     const disposePrepare = window.electronAPI.onPrepareDictation?.(async (options) => {
       if (!audioManagerRef.current || startLockRef.current) return;
       if (!canStartDictation(audioManagerRef.current.getState())) return;
-      const generation = ++preparationGenerationRef.current;
+      preparationGenerationRef.current += 1;
       setIsAssistantVoice(false);
       setIsPreparing(true);
       // The prepare event precedes the flag-setting start, so the kind must come
       // from the payload — the audioManager flags still describe the PREVIOUS
       // recording at this point.
       reportLifecycle("preparing", options?.inputKind);
-      await waitForVisualFrames();
-      if (generation !== preparationGenerationRef.current || startLockRef.current) return;
+
+      // Key-down is the earliest reliable point at which audio can be prepared.
+      // Paint the preparing state in parallel; delaying acquisition until after
+      // visual frames leaves immediate speech outside the pre-roll buffer.
       void audioManagerRef.current.prepareMicCapture?.();
     });
 

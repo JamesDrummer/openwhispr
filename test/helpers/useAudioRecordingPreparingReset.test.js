@@ -35,7 +35,9 @@ export default class FakeAudioManager {
   shouldUseStreaming() {
     return false;
   }
-  prepareMicCapture() {}
+  prepareMicCapture() {
+    globalThis.__openWhisprPrepareEvents?.push("prepare");
+  }
   cancelPreparedMicCapture() {}
   cleanup() {}
   async startRecording() {
@@ -113,4 +115,70 @@ test("a failed dictation start reports the lifecycle back to idle instead of sti
 
   assert.equal(started, false);
   assert.deepEqual(reported, ["preparing:dictation", "idle:dictation"]);
+});
+
+test("dictation start prepares the microphone before waiting for visual frames", async (t) => {
+  let root = null;
+  t.after(async () => {
+    if (root) await React.act(async () => root.unmount());
+    delete globalThis.__openWhisprPrepareEvents;
+  });
+
+  const noopDispose = () => () => {};
+  installBrowserGlobals(t, {
+    window: {
+      electronAPI: {
+        onToggleDictation: noopDispose,
+        onToggleVoiceAgent: noopDispose,
+        onToggleTranslation: noopDispose,
+        onStartDictation: noopDispose,
+        onPrepareDictation: noopDispose,
+        onCancelDictationPreparation: noopDispose,
+        onStopDictation: noopDispose,
+        dictationLifecycleStateChanged() {},
+      },
+    },
+  });
+  const container = installHookDom(t);
+  const queuedFrames = [];
+  globalThis.requestAnimationFrame = (callback) => {
+    queuedFrames.push(callback);
+    return queuedFrames.length;
+  };
+  globalThis.__openWhisprPrepareEvents = [];
+
+  const vite = await createRendererServer(t, {
+    cachePrefix: "openwhispr-audio-recording-immediate-mic-prepare-",
+    mockModules: {
+      "/helpers/audioManager": FAKE_AUDIO_MANAGER_SOURCE,
+    },
+  });
+  const { useAudioRecording } = await vite.ssrLoadModule("/hooks/useAudioRecording.js");
+
+  let api;
+  function Harness() {
+    api = useAudioRecording(() => {}, { onDemoEvent: () => {} });
+    return null;
+  }
+
+  root = createRoot(container);
+  await React.act(async () => {
+    root.render(React.createElement(Harness));
+  });
+
+  let startPromise;
+  await React.act(async () => {
+    startPromise = api.startRecording();
+    await Promise.resolve();
+  });
+
+  assert.deepEqual(globalThis.__openWhisprPrepareEvents, ["prepare"]);
+  assert.equal(queuedFrames.length, 1);
+
+  await React.act(async () => {
+    queuedFrames.shift()(0);
+    await Promise.resolve();
+    queuedFrames.shift()(16);
+    await startPromise;
+  });
 });
