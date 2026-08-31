@@ -21,7 +21,7 @@ import {
   PreparedMicCapture,
   disposePreparedCapture,
   discardPreRoll,
-  PRE_ROLL_MAX_AGE_MS,
+  isPreparedPreRollFresh,
 } from "./preparedMicCapture";
 import { MicStreamHold } from "./micStreamHold";
 import { ActiveMicRecoveryController } from "./activeMicRecovery";
@@ -1234,7 +1234,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
       this._stopRequestedDuringMicRecovery = false;
       this._cancelRequestedDuringMicRecovery = false;
       this._receivedAudioData = false;
-      if (prepared && Date.now() - prepared.startedAt > PRE_ROLL_MAX_AGE_MS) {
+      if (prepared && !isPreparedPreRollFresh(prepared)) {
         discardPreRoll(prepared);
       }
       const preRoll =

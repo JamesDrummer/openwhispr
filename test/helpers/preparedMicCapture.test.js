@@ -165,6 +165,15 @@ test("discardPreRoll drops the recorder and chunks but keeps the stream", async 
   assert.equal(streamStops, 0);
 });
 
+test("pre-roll remains fresh while an active preparation completes", async () => {
+  const { isPreparedPreRollFresh, PRE_ROLL_MAX_AGE_MS } = await load();
+  const startedAt = 1000;
+
+  assert.equal(isPreparedPreRollFresh({ startedAt }, startedAt + 5000), true);
+  assert.equal(isPreparedPreRollFresh({ startedAt }, startedAt + PRE_ROLL_MAX_AGE_MS), true);
+  assert.equal(isPreparedPreRollFresh({ startedAt }, startedAt + PRE_ROLL_MAX_AGE_MS + 1), false);
+});
+
 test("stays active after a cancel until the abandoned acquisition settles", async () => {
   const { PreparedMicCapture } = await load();
   const events = [];

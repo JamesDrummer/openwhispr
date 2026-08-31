@@ -3,10 +3,14 @@
 // forgotten prepared stream would otherwise hold the mic open indefinitely.
 export const PREPARED_MAX_AGE_MS = 10000;
 
-// Pre-roll older than a normal key-down-to-start gap was buffered by a prepare
-// the recording never answered, so it holds audio from before the user meant to
-// dictate. The stream is still reusable; only the buffered chunks are not.
-export const PRE_ROLL_MAX_AGE_MS = 2000;
+// A prepared capture can now remain in the "preparing" UI while target-app and
+// STT setup completes. Its audio still belongs to the active hotkey press, so
+// preserve it for the same lifetime as the prepared capture itself. Untaken
+// preparations are disposed by PreparedMicCapture's expiry below.
+export const PRE_ROLL_MAX_AGE_MS = PREPARED_MAX_AGE_MS;
+
+export const isPreparedPreRollFresh = (prepared, now = Date.now()) =>
+  !!prepared && now - prepared.startedAt <= PRE_ROLL_MAX_AGE_MS;
 
 export const discardPreRoll = (prepared) => {
   const recorder = prepared?.recorder;
