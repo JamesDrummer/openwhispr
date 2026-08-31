@@ -125,6 +125,7 @@ test("dictation start prepares the microphone before waiting for visual frames",
   });
 
   const noopDispose = () => () => {};
+  let prepareHandler;
   installBrowserGlobals(t, {
     window: {
       electronAPI: {
@@ -132,7 +133,10 @@ test("dictation start prepares the microphone before waiting for visual frames",
         onToggleVoiceAgent: noopDispose,
         onToggleTranslation: noopDispose,
         onStartDictation: noopDispose,
-        onPrepareDictation: noopDispose,
+        onPrepareDictation: (callback) => {
+          prepareHandler = callback;
+          return () => {};
+        },
         onCancelDictationPreparation: noopDispose,
         onStopDictation: noopDispose,
         dictationLifecycleStateChanged() {},
@@ -165,6 +169,26 @@ test("dictation start prepares the microphone before waiting for visual frames",
   await React.act(async () => {
     root.render(React.createElement(Harness));
   });
+
+  let prepareVisualPromise;
+  await React.act(async () => {
+    prepareVisualPromise = prepareHandler({ inputKind: "dictation" });
+    await Promise.resolve();
+  });
+
+  assert.deepEqual(globalThis.__openWhisprPrepareEvents, ["prepare"]);
+  assert.equal(api.isPreparing, true);
+  assert.equal(queuedFrames.length, 1);
+
+  await React.act(async () => {
+    queuedFrames.shift()(0);
+    await Promise.resolve();
+    queuedFrames.shift()(16);
+    await prepareVisualPromise;
+  });
+
+  globalThis.__openWhisprPrepareEvents.length = 0;
+  queuedFrames.length = 0;
 
   let startPromise;
   await React.act(async () => {

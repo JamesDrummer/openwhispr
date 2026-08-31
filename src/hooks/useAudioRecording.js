@@ -721,7 +721,7 @@ export const useAudioRecording = (toast, options = {}) => {
     const disposePrepare = window.electronAPI.onPrepareDictation?.(async (options) => {
       if (!audioManagerRef.current || startLockRef.current) return;
       if (!canStartDictation(audioManagerRef.current.getState())) return;
-      preparationGenerationRef.current += 1;
+      const generation = ++preparationGenerationRef.current;
       setIsAssistantVoice(false);
       setIsPreparing(true);
       // The prepare event precedes the flag-setting start, so the kind must come
@@ -730,9 +730,14 @@ export const useAudioRecording = (toast, options = {}) => {
       reportLifecycle("preparing", options?.inputKind);
 
       // Key-down is the earliest reliable point at which audio can be prepared.
-      // Paint the preparing state in parallel; delaying acquisition until after
-      // visual frames leaves immediate speech outside the pre-roll buffer.
+      // Begin capture first, then keep this handler alive through the visual
+      // frames so React can commit and paint the preparing pill in parallel.
+      // Delaying acquisition until after those frames leaves immediate speech
+      // outside the pre-roll buffer; dropping the wait entirely can leave the
+      // newly-shown native window without a committed preparing surface.
       void audioManagerRef.current.prepareMicCapture?.();
+      await waitForVisualFrames();
+      if (generation !== preparationGenerationRef.current || startLockRef.current) return;
     });
 
     const disposeCancelPreparation = window.electronAPI.onCancelDictationPreparation?.(() => {
