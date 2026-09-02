@@ -427,6 +427,9 @@ class AudioManager {
     this._alwaysReadyAudioContext = null;
     this._alwaysReadySource = null;
     this._alwaysReadyGain = null;
+    this._alwaysReadyAudioElement = null;
+    this._alwaysReadyWatchTimer = null;
+    this._alwaysReadyMutedChecks = 0;
     this._cleanedUp = false;
     this.preparedMicCapture = new PreparedMicCapture({
       dispose: (prepared) => this._disposePrepared(prepared),
@@ -453,6 +456,7 @@ class AudioManager {
         this._alwaysReadyGeneration += 1;
         if (this._micHoldSeconds === ALWAYS_READY_MIC_HOLD_SECONDS) {
           this._stopMicAlwaysReadySink();
+          this._stopMicAlwaysReadyWatchdog();
         }
         this._micHoldSeconds = holdSeconds;
         this.micStreamHold.setHoldSeconds(holdSeconds);
@@ -990,6 +994,9 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
   // privacy indicator visible. Hold one unrecorded master stream from app
   // startup; dictations take disposable clones and therefore start instantly.
   async ensureMicAlwaysReady() {
+    if (this._micHoldSeconds === ALWAYS_READY_MIC_HOLD_SECONDS) {
+      this._startMicAlwaysReadyWatchdog();
+    }
     if (
       this._cleanedUp ||
       this._micHoldSeconds !== ALWAYS_READY_MIC_HOLD_SECONDS ||
@@ -1066,12 +1073,37 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
       this._alwaysReadyAudioContext = context;
       this._alwaysReadySource = source;
       this._alwaysReadyGain = gain;
+
+      // A detached, muted media element gives Chromium a second explicit
+      // consumer. Unlike a zero-gain graph alone, it continues pulling capture
+      // frames when macOS idles the hidden dictation window.
+      const audio = document.createElement("audio");
+      audio.muted = true;
+      audio.volume = 0;
+      audio.autoplay = true;
+      audio.playsInline = true;
+      audio.srcObject = stream;
+      audio.play().catch((error) => {
+        logger.debug(
+          "Always Ready silent consumer start failed",
+          { error: error.message },
+          "audio"
+        );
+      });
+      this._alwaysReadyAudioElement = audio;
+      this._alwaysReadyMutedChecks = 0;
     } catch (error) {
       logger.warn("Always Ready audio sink setup failed", { error: error.message }, "audio");
     }
   }
 
   _stopMicAlwaysReadySink() {
+    const audio = this._alwaysReadyAudioElement;
+    this._alwaysReadyAudioElement = null;
+    if (audio) {
+      audio.pause?.();
+      audio.srcObject = null;
+    }
     this._alwaysReadySource?.disconnect?.();
     this._alwaysReadyGain?.disconnect?.();
     const context = this._alwaysReadyAudioContext;
@@ -1079,6 +1111,52 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
     this._alwaysReadyGain = null;
     this._alwaysReadyAudioContext = null;
     if (context && context.state !== "closed") context.close().catch(() => {});
+  }
+
+  _startMicAlwaysReadyWatchdog() {
+    if (this._alwaysReadyWatchTimer !== null || this._cleanedUp) return;
+    this._alwaysReadyWatchTimer = setInterval(() => {
+      if (this._micHoldSeconds !== ALWAYS_READY_MIC_HOLD_SECONDS || this._cleanedUp) return;
+
+      const context = this._alwaysReadyAudioContext;
+      if (context?.state === "suspended") context.resume().catch(() => {});
+      const audio = this._alwaysReadyAudioElement;
+      if (audio?.paused) audio.play().catch(() => {});
+
+      const track = this.micStreamHold.master?.getAudioTracks?.()[0] ?? null;
+      if (!track) {
+        if (!this._alwaysReadyPromise && !this.isRecording && !this.isStreaming) {
+          void this.ensureMicAlwaysReady();
+        }
+        return;
+      }
+
+      this._alwaysReadyMutedChecks = track.muted ? this._alwaysReadyMutedChecks + 1 : 0;
+      if (
+        !this.isRecording &&
+        !this.isStreaming &&
+        (track.readyState === "ended" || this._alwaysReadyMutedChecks >= 2)
+      ) {
+        logger.info(
+          "Always Ready microphone became inactive; reopening",
+          { readyState: track.readyState, muted: track.muted },
+          "audio"
+        );
+        this._alwaysReadyGeneration += 1;
+        this._alwaysReadyMutedChecks = 0;
+        this._stopMicAlwaysReadySink();
+        this.micStreamHold.drop();
+        this._resumeMicAlwaysReadyAfterPendingOpen();
+      }
+    }, 5000);
+  }
+
+  _stopMicAlwaysReadyWatchdog() {
+    if (this._alwaysReadyWatchTimer !== null) {
+      clearInterval(this._alwaysReadyWatchTimer);
+      this._alwaysReadyWatchTimer = null;
+    }
+    this._alwaysReadyMutedChecks = 0;
   }
 
   // A device change can arrive while getUserMedia is still pending. Invalidate
@@ -5217,6 +5295,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
   cleanup() {
     this._cleanedUp = true;
     this._alwaysReadyGeneration += 1;
+    this._stopMicAlwaysReadyWatchdog();
     this._stopMicAlwaysReadySink();
     this.micRecovery.stop();
     this._unsubscribeSettings?.();

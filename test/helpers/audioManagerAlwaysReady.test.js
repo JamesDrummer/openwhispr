@@ -10,7 +10,12 @@ test("Always Ready opens and retains an idle microphone stream", async (t) => {
     settingsKey: "__alwaysReadySettings",
     settings: {},
   });
-  const track = { stopped: 0, stop() { this.stopped += 1; } };
+  const track = {
+    stopped: 0,
+    stop() {
+      this.stopped += 1;
+    },
+  };
   const stream = { getTracks: () => [track] };
   const adopted = [];
   const sinks = [];
@@ -37,6 +42,7 @@ test("Always Ready opens and retains an idle microphone stream", async (t) => {
     },
     getAudioConstraints: async () => ({ audio: { deviceId: { exact: "mic-1" } } }),
     acquireHealthyMicStream: async (value) => value,
+    _startMicAlwaysReadyWatchdog: () => {},
     _startMicAlwaysReadySink: (value) => sinks.push(value),
     _stampMicWarm: () => {},
   });
@@ -111,4 +117,56 @@ test("a dictation waits for an in-progress Always Ready open instead of opening 
   assert.equal(await acquisition, heldStream);
   assert.equal(cloneAttempts, 2);
   assert.equal(coldAcquisitions, 0);
+});
+
+test("Always Ready watchdog reopens a persistently muted idle microphone", async (t) => {
+  installMicCaptureGlobals(t);
+  const { AudioManager } = await loadAudioManager(t, {
+    cachePrefix: "openwhispr-always-ready-watchdog-test-",
+    settingsKey: "__alwaysReadyWatchdogSettings",
+    settings: {},
+  });
+  let tick;
+  const originalSetInterval = globalThis.setInterval;
+  globalThis.setInterval = (callback) => {
+    tick = callback;
+    return 17;
+  };
+  t.after(() => {
+    globalThis.setInterval = originalSetInterval;
+  });
+
+  const track = { muted: true, readyState: "live" };
+  let drops = 0;
+  let restarts = 0;
+  const manager = Object.assign(Object.create(AudioManager.prototype), {
+    _micHoldSeconds: -1,
+    _alwaysReadyWatchTimer: null,
+    _alwaysReadyMutedChecks: 0,
+    _alwaysReadyPromise: null,
+    _alwaysReadyAudioContext: null,
+    _alwaysReadyAudioElement: null,
+    _cleanedUp: false,
+    isRecording: false,
+    isStreaming: false,
+    micStreamHold: {
+      master: { getAudioTracks: () => [track] },
+      drop: () => {
+        drops += 1;
+      },
+    },
+    _stopMicAlwaysReadySink: () => {},
+    _resumeMicAlwaysReadyAfterPendingOpen: () => {
+      restarts += 1;
+    },
+  });
+
+  manager._startMicAlwaysReadyWatchdog();
+  tick();
+  assert.equal(restarts, 0);
+  tick();
+
+  assert.equal(drops, 1);
+  assert.equal(restarts, 1);
+  assert.equal(manager._alwaysReadyMutedChecks, 0);
 });
