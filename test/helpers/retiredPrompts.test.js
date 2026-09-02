@@ -4,8 +4,9 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { createHash } = require("node:crypto");
 
-const load = () => import("../../src/config/retiredPrompts.js");
-const loadRegistry = () => import("../../src/config/prompts/registry.ts");
+const unwrapModule = (module) => module.default || module;
+const load = () => import("../../src/config/retiredPrompts.js").then(unwrapModule);
+const loadRegistry = () => import("../../src/config/prompts/registry.ts").then(unwrapModule);
 
 // Byte-exact copies of retired shipped defaults, extracted from git history.
 const fixtures = require("./retiredPromptFixtures.json");
@@ -122,6 +123,15 @@ test("current-hash snapshot matches the live locale bundles (ratchet)", async ()
     "a shipped default prompt changed: move its old hash into RETIRED_DEFAULT_PROMPT_HASHES " +
       "and record the new hash in CURRENT_DEFAULT_PROMPT_HASHES (src/config/retiredPrompts.js)"
   );
+});
+
+test("English cleanup preserves spoken order without removing useful formatting", () => {
+  const prompt = readLocaleBundles().en.cleanupPrompt;
+
+  assert.match(prompt, /keep sentences, clauses, examples, and qualifications in the order spoken/);
+  assert.match(prompt, /bullet lists, numbered steps, or email layout/);
+  assert.doesNotMatch(prompt, /paragraph breaks between topics/);
+  assert.match(prompt, /Never paraphrase, summarise, compress, reorganise/);
 });
 
 test("retired and current hash sets are disjoint", async () => {
