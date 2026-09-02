@@ -424,6 +424,9 @@ class AudioManager {
     this._micOpenReported = false;
     this._alwaysReadyGeneration = 0;
     this._alwaysReadyPromise = null;
+    this._alwaysReadyAudioContext = null;
+    this._alwaysReadySource = null;
+    this._alwaysReadyGain = null;
     this._cleanedUp = false;
     this.preparedMicCapture = new PreparedMicCapture({
       dispose: (prepared) => this._disposePrepared(prepared),
@@ -448,6 +451,9 @@ class AudioManager {
       const holdSeconds = Number(state.micWarmHoldSeconds) || 0;
       if (holdSeconds !== this._micHoldSeconds) {
         this._alwaysReadyGeneration += 1;
+        if (this._micHoldSeconds === ALWAYS_READY_MIC_HOLD_SECONDS) {
+          this._stopMicAlwaysReadySink();
+        }
         this._micHoldSeconds = holdSeconds;
         this.micStreamHold.setHoldSeconds(holdSeconds);
         if (holdSeconds === ALWAYS_READY_MIC_HOLD_SECONDS) void this.ensureMicAlwaysReady();
@@ -455,6 +461,7 @@ class AudioManager {
       const deviceKey = micDeviceKey(state);
       if (deviceKey !== this._micDeviceKey) {
         this._alwaysReadyGeneration += 1;
+        this._stopMicAlwaysReadySink();
         this._micDeviceKey = deviceKey;
         this.cachedMicDeviceId = null;
         this.rejectedMicDeviceId = null;
@@ -477,6 +484,7 @@ class AudioManager {
     // Otherwise wake-after-idle keeps requesting a stale deviceId that yields silence.
     this._onDeviceChange = () => {
       this._alwaysReadyGeneration += 1;
+      this._stopMicAlwaysReadySink();
       this.cachedMicDeviceId = null;
       this._micWarmedAt = 0;
       this.rejectedMicDeviceId = null;
@@ -1017,6 +1025,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         }
 
         this.micStreamHold.adopt(stream, this._constraintsKey(constraints));
+        this._startMicAlwaysReadySink(stream);
         this._stampMicWarm();
         logger.info("Microphone is always ready", {}, "audio");
         return true;
@@ -1033,6 +1042,43 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
     } finally {
       if (this._alwaysReadyPromise === pending) this._alwaysReadyPromise = null;
     }
+  }
+
+  // Merely retaining a MediaStream is not enough on macOS: Chromium may stop
+  // pulling frames from an idle source and mark it muted. A connected zero-gain
+  // Web Audio graph keeps the device genuinely flowing without recording or
+  // playing any microphone audio.
+  _startMicAlwaysReadySink(stream) {
+    if (this._micHoldSeconds !== ALWAYS_READY_MIC_HOLD_SECONDS) return;
+    this._stopMicAlwaysReadySink();
+    try {
+      const context = new AudioContext();
+      const source = context.createMediaStreamSource(stream);
+      const gain = context.createGain();
+      gain.gain.value = 0;
+      source.connect(gain);
+      gain.connect(context.destination);
+      if (context.state === "suspended") {
+        context.resume().catch((error) => {
+          logger.debug("Always Ready audio sink resume failed", { error: error.message }, "audio");
+        });
+      }
+      this._alwaysReadyAudioContext = context;
+      this._alwaysReadySource = source;
+      this._alwaysReadyGain = gain;
+    } catch (error) {
+      logger.warn("Always Ready audio sink setup failed", { error: error.message }, "audio");
+    }
+  }
+
+  _stopMicAlwaysReadySink() {
+    this._alwaysReadySource?.disconnect?.();
+    this._alwaysReadyGain?.disconnect?.();
+    const context = this._alwaysReadyAudioContext;
+    this._alwaysReadySource = null;
+    this._alwaysReadyGain = null;
+    this._alwaysReadyAudioContext = null;
+    if (context && context.state !== "closed") context.close().catch(() => {});
   }
 
   // A device change can arrive while getUserMedia is still pending. Invalidate
@@ -1147,7 +1193,17 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
 
   async _acquireCaptureStream(constraints) {
     const key = this._constraintsKey(constraints);
-    const held = this.micStreamHold.acquireClone(key);
+    let held = this.micStreamHold.acquireClone(key);
+    // If app-start warm-up is still opening this exact microphone, wait for it
+    // rather than issuing a second competing getUserMedia request.
+    if (
+      !held &&
+      this._micHoldSeconds === ALWAYS_READY_MIC_HOLD_SECONDS &&
+      this._alwaysReadyPromise
+    ) {
+      await this._alwaysReadyPromise;
+      held = this.micStreamHold.acquireClone(key);
+    }
     if (held) {
       this._stampMicWarm();
       return held;
@@ -1157,7 +1213,11 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
       constraints
     );
     this._stampMicWarm();
-    return this.micStreamHold.adoptAndClone(stream, key);
+    const recordingStream = this.micStreamHold.adoptAndClone(stream, key);
+    if (this._micHoldSeconds === ALWAYS_READY_MIC_HOLD_SECONDS) {
+      this._startMicAlwaysReadySink(stream);
+    }
+    return recordingStream;
   }
 
   // TTL-gated warm-up used only by the streaming-connection warm-up. The
@@ -5157,6 +5217,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
   cleanup() {
     this._cleanedUp = true;
     this._alwaysReadyGeneration += 1;
+    this._stopMicAlwaysReadySink();
     this.micRecovery.stop();
     this._unsubscribeSettings?.();
     this.preparedMicCapture.cancel();
