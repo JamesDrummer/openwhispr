@@ -219,7 +219,7 @@ export const MicrophoneSettings: React.FC<MicrophoneSettingsProps> = ({
           </SelectContent>
         </Select>
       </SettingsRow>
-      {micWarmHoldSeconds > 0 && (
+      {micWarmHoldSeconds !== 0 && (
         <p className="text-xs text-muted-foreground">
           {t("microphoneSettings.warmHold.privacyNote")}
         </p>

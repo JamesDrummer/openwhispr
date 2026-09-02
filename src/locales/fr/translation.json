@@ -1380,7 +1380,8 @@
         "0": "Désactivé",
         "10": "10 secondes",
         "60": "1 minute",
-        "900": "15 minutes"
+        "900": "15 minutes",
+        "-1": "Toujours prêt"
       }
     }
   },

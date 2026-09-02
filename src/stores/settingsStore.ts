@@ -174,9 +174,10 @@ function readNumber(key: string, fallback: number): number {
   return isNaN(parsed) ? fallback : parsed;
 }
 
-// Durations offered by the mic warm-hold select; unknown values snap to 0 (off)
-// so a hand-edited localStorage entry can never hold the mic open indefinitely.
-export const MIC_WARM_HOLD_CHOICES = [0, 10, 60, 900] as const;
+// Durations offered by the mic warm-hold select. -1 is the explicit Always
+// Ready choice; unknown values still snap to 0 so a hand-edited entry cannot
+// silently enable indefinite microphone access.
+export const MIC_WARM_HOLD_CHOICES = [0, 10, 60, 900, -1] as const;
 
 function snapMicWarmHold(value: number): number {
   return (MIC_WARM_HOLD_CHOICES as readonly number[]).includes(value) ? value : 0;

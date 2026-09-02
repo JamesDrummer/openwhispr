@@ -161,6 +161,23 @@ test("setHoldSeconds(0) drops a live master immediately", async () => {
   assert.deepEqual(events, [true, false]);
 });
 
+test("always ready keeps the master without arming a release timer", async () => {
+  const { ALWAYS_READY_MIC_HOLD_SECONDS } = await load();
+  const { hold, timers, events } = await makeHold({
+    holdSeconds: ALWAYS_READY_MIC_HOLD_SECONDS,
+  });
+  const track = fakeTrack();
+
+  const adopted = hold.adopt(fakeStream(track), "key");
+  hold.touch();
+
+  assert.equal(adopted, true);
+  assert.equal(track.clones, 0);
+  assert.equal(hold.active, true);
+  assert.deepEqual(timers.armed, []);
+  assert.deepEqual(events, [true]);
+});
+
 test("drop is idempotent and silent when nothing is held", async () => {
   const { hold, events } = await makeHold();
   hold.drop();

@@ -1270,7 +1270,8 @@
         "0": "Desativado",
         "10": "10 segundos",
         "60": "1 minuto",
-        "900": "15 minutos"
+        "900": "15 minutos",
+        "-1": "Sempre pronto"
       }
     }
   },

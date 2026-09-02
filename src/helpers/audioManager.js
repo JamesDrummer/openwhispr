@@ -23,7 +23,7 @@ import {
   discardPreRoll,
   isPreparedPreRollFresh,
 } from "./preparedMicCapture";
-import { MicStreamHold } from "./micStreamHold";
+import { ALWAYS_READY_MIC_HOLD_SECONDS, MicStreamHold } from "./micStreamHold";
 import { ActiveMicRecoveryController } from "./activeMicRecovery";
 import { followsSystemDefaultMic } from "./micSelectionRecovery";
 import { isCacheableMicrophoneResolution, resolvePreferredMicrophone } from "./microphoneSelection";
@@ -422,6 +422,9 @@ class AudioManager {
     this._micWarmedAt = 0;
     this._startInProgress = false;
     this._micOpenReported = false;
+    this._alwaysReadyGeneration = 0;
+    this._alwaysReadyPromise = null;
+    this._cleanedUp = false;
     this.preparedMicCapture = new PreparedMicCapture({
       dispose: (prepared) => this._disposePrepared(prepared),
       onActiveChange: () => this._syncMicOpenGate(),
@@ -444,17 +447,23 @@ class AudioManager {
     this._unsubscribeSettings = useSettingsStore.subscribe((state) => {
       const holdSeconds = Number(state.micWarmHoldSeconds) || 0;
       if (holdSeconds !== this._micHoldSeconds) {
+        this._alwaysReadyGeneration += 1;
         this._micHoldSeconds = holdSeconds;
         this.micStreamHold.setHoldSeconds(holdSeconds);
+        if (holdSeconds === ALWAYS_READY_MIC_HOLD_SECONDS) void this.ensureMicAlwaysReady();
       }
       const deviceKey = micDeviceKey(state);
       if (deviceKey !== this._micDeviceKey) {
+        this._alwaysReadyGeneration += 1;
         this._micDeviceKey = deviceKey;
         this.cachedMicDeviceId = null;
         this.rejectedMicDeviceId = null;
         this._micWarmedAt = 0;
         this.cancelPreparedMicCapture();
         this.micStreamHold.drop();
+        if (this._micHoldSeconds === ALWAYS_READY_MIC_HOLD_SECONDS) {
+          this._resumeMicAlwaysReadyAfterPendingOpen();
+        }
       }
     });
 
@@ -467,11 +476,15 @@ class AudioManager {
     // Invalidate the pinned mic device when the OS adds/removes/suspends inputs.
     // Otherwise wake-after-idle keeps requesting a stale deviceId that yields silence.
     this._onDeviceChange = () => {
+      this._alwaysReadyGeneration += 1;
       this.cachedMicDeviceId = null;
       this._micWarmedAt = 0;
       this.rejectedMicDeviceId = null;
       this.cancelPreparedMicCapture();
       this.micStreamHold.drop();
+      if (this._micHoldSeconds === ALWAYS_READY_MIC_HOLD_SECONDS) {
+        this._resumeMicAlwaysReadyAfterPendingOpen();
+      }
     };
     navigator.mediaDevices?.addEventListener?.("devicechange", this._onDeviceChange);
     this.recordingStartTime = null;
@@ -963,6 +976,78 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
     } catch (error) {
       logger.debug("Failed to pre-cache microphone device ID", { error: error.message }, "audio");
     }
+  }
+
+  // Always Ready is deliberately opt-in because macOS keeps its microphone
+  // privacy indicator visible. Hold one unrecorded master stream from app
+  // startup; dictations take disposable clones and therefore start instantly.
+  async ensureMicAlwaysReady() {
+    if (
+      this._cleanedUp ||
+      this._micHoldSeconds !== ALWAYS_READY_MIC_HOLD_SECONDS ||
+      this.micStreamHold.active ||
+      this.isRecording ||
+      this.isStreaming ||
+      this._startInProgress ||
+      this.preparedMicCapture.active
+    ) {
+      return false;
+    }
+    if (this._alwaysReadyPromise) return this._alwaysReadyPromise;
+
+    const generation = ++this._alwaysReadyGeneration;
+    const pending = (async () => {
+      let stream = null;
+      try {
+        const constraints = await this.getAudioConstraints();
+        stream = await this.acquireHealthyMicStream(
+          await navigator.mediaDevices.getUserMedia(constraints),
+          constraints
+        );
+        if (
+          generation !== this._alwaysReadyGeneration ||
+          this._micHoldSeconds !== ALWAYS_READY_MIC_HOLD_SECONDS ||
+          this.isRecording ||
+          this.isStreaming ||
+          this._startInProgress ||
+          this.preparedMicCapture.active
+        ) {
+          stream.getTracks().forEach((track) => track.stop());
+          return false;
+        }
+
+        this.micStreamHold.adopt(stream, this._constraintsKey(constraints));
+        this._stampMicWarm();
+        logger.info("Microphone is always ready", {}, "audio");
+        return true;
+      } catch (error) {
+        stream?.getTracks?.().forEach((track) => track.stop());
+        logger.warn("Always Ready microphone startup failed", { error: error.message }, "audio");
+        return false;
+      }
+    })();
+
+    this._alwaysReadyPromise = pending;
+    try {
+      return await pending;
+    } finally {
+      if (this._alwaysReadyPromise === pending) this._alwaysReadyPromise = null;
+    }
+  }
+
+  // A device change can arrive while getUserMedia is still pending. Invalidate
+  // that open, then retry only after it has finished so the new selection wins.
+  _resumeMicAlwaysReadyAfterPendingOpen() {
+    const pending = this._alwaysReadyPromise;
+    if (!pending) {
+      void this.ensureMicAlwaysReady();
+      return;
+    }
+    void pending.finally(() => {
+      if (!this._cleanedUp && this._micHoldSeconds === ALWAYS_READY_MIC_HOLD_SECONDS) {
+        void this.ensureMicAlwaysReady();
+      }
+    });
   }
 
   // Open the mic the moment a dictation is likely (push-to-talk key-down,
@@ -5070,6 +5155,8 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
   }
 
   cleanup() {
+    this._cleanedUp = true;
+    this._alwaysReadyGeneration += 1;
     this.micRecovery.stop();
     this._unsubscribeSettings?.();
     this.preparedMicCapture.cancel();

@@ -3,6 +3,15 @@
 // open. Recordings only ever own clones, so every existing teardown path keeps
 // stopping the stream it was given, and releasing the master never interrupts a
 // live recording (clones are independent of their source track).
+export const ALWAYS_READY_MIC_HOLD_SECONDS = -1;
+
+const normalizeHoldSeconds = (seconds) =>
+  seconds === ALWAYS_READY_MIC_HOLD_SECONDS
+    ? ALWAYS_READY_MIC_HOLD_SECONDS
+    : Number.isFinite(seconds) && seconds > 0
+      ? seconds
+      : 0;
+
 export class MicStreamHold {
   constructor({
     holdSeconds = 0,
@@ -12,7 +21,7 @@ export class MicStreamHold {
     makeStream = (track) => new MediaStream([track]),
     isBusy = () => false,
   } = {}) {
-    this.holdSeconds = holdSeconds > 0 ? holdSeconds : 0;
+    this.holdSeconds = normalizeHoldSeconds(holdSeconds);
     this.setTimer = setTimer;
     this.clearTimer = clearTimer;
     this.onHoldChange = onHoldChange;
@@ -28,7 +37,7 @@ export class MicStreamHold {
   }
 
   setHoldSeconds(seconds) {
-    this.holdSeconds = seconds > 0 ? seconds : 0;
+    this.holdSeconds = normalizeHoldSeconds(seconds);
     if (this.holdSeconds === 0) this.drop();
     else if (this.master) this.touch();
   }
@@ -46,10 +55,10 @@ export class MicStreamHold {
     return this.makeStream(track.clone());
   }
 
-  // Keeps a freshly opened stream as the master and returns a clone for the
-  // recording — one getUserMedia serves both roles. Pass-through when disabled.
-  adoptAndClone(stream, constraintsKey) {
-    if (this.holdSeconds === 0) return stream;
+  // Keeps a freshly opened stream as the master without creating a recording
+  // clone. Used by Always Ready while the app is otherwise idle.
+  adopt(stream, constraintsKey) {
+    if (this.holdSeconds === 0) return false;
     const wasActive = this.active;
     // Replacing a master is a swap, not a release+acquire: stop the old tracks
     // silently so observers see one continuous hold, not a false→true blip.
@@ -59,6 +68,13 @@ export class MicStreamHold {
     this.masterKey = constraintsKey;
     if (!wasActive) this.onHoldChange?.(true);
     this.touch();
+    return true;
+  }
+
+  // Keeps a freshly opened stream as the master and returns a clone for the
+  // recording — one getUserMedia serves both roles. Pass-through when disabled.
+  adoptAndClone(stream, constraintsKey) {
+    if (!this.adopt(stream, constraintsKey)) return stream;
     return this.makeStream(this._masterTrack().clone());
   }
 

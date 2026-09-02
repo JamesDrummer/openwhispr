@@ -1380,7 +1380,8 @@
         "0": "Aus",
         "10": "10 Sekunden",
         "60": "1 Minute",
-        "900": "15 Minuten"
+        "900": "15 Minuten",
+        "-1": "Immer bereit"
       }
     }
   },

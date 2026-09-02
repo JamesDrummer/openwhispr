@@ -1291,7 +1291,8 @@
         "0": "Disattivato",
         "10": "10 secondi",
         "60": "1 minuto",
-        "900": "15 minuti"
+        "900": "15 minuti",
+        "-1": "Sempre pronto"
       }
     }
   },

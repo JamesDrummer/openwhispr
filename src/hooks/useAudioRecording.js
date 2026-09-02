@@ -657,6 +657,9 @@ export const useAudioRecording = (toast, options = {}) => {
       },
     });
 
+    // This is a no-op unless the user explicitly selected Always Ready.
+    void audioManagerRef.current.ensureMicAlwaysReady?.();
+
     // Keep overlay content protection in sync with the screen-context setting
     // so the dictation pill stays out of captures (survives window recreation).
     window.electronAPI.setScreenContextEnabled?.(getSettings().voiceAgentScreenContext);

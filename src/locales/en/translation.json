@@ -1380,7 +1380,8 @@
         "0": "Off",
         "10": "10 seconds",
         "60": "1 minute",
-        "900": "15 minutes"
+        "900": "15 minutes",
+        "-1": "Always ready"
       }
     }
   },
