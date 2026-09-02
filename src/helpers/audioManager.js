@@ -937,6 +937,11 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         settings,
         forceSystemDefault: forceDefaultMic,
         refreshSystemDefault: forceDefaultMic || refreshSystemDefault,
+        // Chromium's explicit `default` input follows the live macOS default
+        // already. The native friendly-name lookup is useful in Settings, but
+        // must not sit on the recording hot path: if its helper is unavailable
+        // it can consume the full three-second timeout on every cache expiry.
+        resolveNativeSystemDefault: false,
       });
       const deviceId = resolution.device?.deviceId;
 

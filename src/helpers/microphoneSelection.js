@@ -103,6 +103,7 @@ export async function resolvePreferredMicrophone({
   mediaDevices = navigator.mediaDevices,
   forceSystemDefault = false,
   refreshSystemDefault = false,
+  resolveNativeSystemDefault = true,
   getSystemDefault = (options) => window.electronAPI?.getSystemDefaultMicrophone?.(options),
 }) {
   const effectiveSettings = forceSystemDefault
@@ -112,7 +113,7 @@ export async function resolvePreferredMicrophone({
   const devices = await mediaDevices.enumerateDevices();
   let systemDefault = null;
 
-  if (mode === "system") {
+  if (mode === "system" && resolveNativeSystemDefault) {
     try {
       systemDefault = (await getSystemDefault?.({ refresh: refreshSystemDefault })) || null;
     } catch {
