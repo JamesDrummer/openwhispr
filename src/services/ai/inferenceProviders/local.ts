@@ -2,6 +2,7 @@ import type { InferenceProvider } from "./types";
 import { wrapCleanupTranscript } from "../../../config/prompts";
 import logger from "../../../utils/logger";
 import { resolveLocalInferenceTemperature } from "../../../helpers/localInferenceConfig.js";
+import { buildLocalInferenceError } from "../../../utils/localInferenceError";
 
 export const localProvider: InferenceProvider = {
   id: "local",
@@ -29,7 +30,7 @@ export const localProvider: InferenceProvider = {
 
     if (!result.success) {
       logger.logReasoning("LOCAL_ERROR", { model, processingTimeMs, error: result.error });
-      throw new Error(result.error);
+      throw buildLocalInferenceError(result);
     }
 
     logger.logReasoning("LOCAL_SUCCESS", {

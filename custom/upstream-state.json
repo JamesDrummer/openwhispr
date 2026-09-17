@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
   "upstreamRepository": "OpenWhispr/openwhispr",
-  "currentBaseSha": "313ba032534d7a7ca8c3d633d096ec3171dfcb6c",
+  "currentBaseSha": "1c123e8739f87c0a72d0b252bc9cff14e684b7f4",
   "lastObservedStableRelease": {
-    "tag": "v1.9.2",
-    "commitSha": "313ba032534d7a7ca8c3d633d096ec3171dfcb6c"
+    "tag": "v1.10.2",
+    "commitSha": "1c123e8739f87c0a72d0b252bc9cff14e684b7f4"
   },
   "watchedPaths": [
     ".github/workflows/",

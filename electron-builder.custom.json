@@ -8,7 +8,7 @@
   "extraMetadata": {
     "openwhisprChannel": "custom",
     "openwhisprFeatureSet": "model-warmth-v1",
-    "openwhisprUpstreamBase": "313ba032534d7a7ca8c3d633d096ec3171dfcb6c"
+    "openwhisprUpstreamBase": "1c123e8739f87c0a72d0b252bc9cff14e684b7f4"
   },
   "protocols": [
     {
@@ -28,7 +28,7 @@
       "CFBundleDisplayName": "OpenWhispr Custom",
       "OpenWhisprChannel": "custom",
       "OpenWhisprFeatureSet": "model-warmth-v1",
-      "OpenWhisprUpstreamBase": "313ba032534d7a7ca8c3d633d096ec3171dfcb6c",
+      "OpenWhisprUpstreamBase": "1c123e8739f87c0a72d0b252bc9cff14e684b7f4",
       "NSMicrophoneUsageDescription": "OpenWhispr Custom uses the microphone to capture your voice for transcription.",
       "NSAudioCaptureUsageDescription": "OpenWhispr Custom uses system audio to capture other participants' audio from calls and meetings.",
       "NSAccessibilityUsageDescription": "OpenWhispr Custom needs accessibility permissions to paste transcribed text into other applications."
